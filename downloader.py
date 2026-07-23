@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import mimetypes
+import json
 import os
 import re
 import shutil
@@ -682,13 +683,16 @@ def _best_thumbnail(info: dict[str, Any]) -> dict[str, Any] | None:
     )
 
 
-def _extension_from_response(url: str, content_type: str | None, default: str = ".jpg") -> str:
+def _extension_from_response(
+    url: str, content_type: str | None, default: str = ".jpg", allowed: set[str] | None = None
+) -> str:
+    allowed = allowed or IMAGE_EXTENSIONS
     extension = Path(urlparse(url).path).suffix.lower()
-    if extension in IMAGE_EXTENSIONS:
+    if extension in allowed:
         return extension
     if content_type:
         guessed = mimetypes.guess_extension(content_type.split(";", 1)[0].strip())
-        if guessed and guessed.lower() in IMAGE_EXTENSIONS:
+        if guessed and guessed.lower() in allowed:
             return guessed.lower()
     return default
 
@@ -698,19 +702,25 @@ def _download_url_to_file(
     destination_without_suffix: Path,
     referer: str,
     max_filesize: int | None,
+    media_kind: str = "image",
+    extra_headers: dict[str, str] | None = None,
 ) -> Path:
-    request = Request(
-        media_url,
-        headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Referer": referer,
-        },
-    )
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Referer": referer,
+    }
+    if extra_headers:
+        headers.update(extra_headers)
+    request = Request(media_url, headers=headers)
+    allowed = VIDEO_EXTENSIONS if media_kind == "video" else IMAGE_EXTENSIONS
+    default_ext = ".mp4" if media_kind == "video" else ".jpg"
     with urlopen(request, timeout=45) as response:
         content_length = response.headers.get("Content-Length")
         if max_filesize and content_length and int(content_length) > max_filesize:
-            raise RuntimeError("Ukuran foto melebihi batas server.")
-        extension = _extension_from_response(media_url, response.headers.get("Content-Type"))
+            raise RuntimeError("Ukuran file melebihi batas server.")
+        extension = _extension_from_response(
+            media_url, response.headers.get("Content-Type"), default_ext, allowed
+        )
         destination = destination_without_suffix.with_suffix(extension)
         written = 0
         with destination.open("wb") as handle:
@@ -722,7 +732,7 @@ def _download_url_to_file(
                 if max_filesize and written > max_filesize:
                     handle.close()
                     destination.unlink(missing_ok=True)
-                    raise RuntimeError("Ukuran foto melebihi batas server.")
+                    raise RuntimeError("Ukuran file melebihi batas server.")
                 handle.write(chunk)
     return destination
 
@@ -753,6 +763,155 @@ def _download_best_thumbnail(
     info["_photo_source"] = f"Thumbnail {_platform_name(url)}"
     info["_photo_archive"] = False
     return info, outputs
+
+
+TIKTOK_REHYDRATION_MARKER = (
+    '<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application/json">'
+)
+
+
+def _tiktok_item_struct(url: str, timeout: int = 30) -> dict[str, Any] | None:
+    """Fetch the TikTok post page directly and pull out the same JSON blob
+    the official web app hydrates from (itemInfo.itemStruct). We do this
+    ourselves instead of relying on gallery-dl because gallery-dl's TikTok
+    extractor only ever reads each slideshow image's plain `imageURL` field
+    and never looks at the per-image 'Foto Live' motion-clip data that TikTok
+    includes for slides that have one."""
+    request = Request(url, headers=_preview_headers_for_platform("TikTok"))
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            html = response.read().decode("utf-8", errors="replace")
+    except Exception:
+        return None
+    start = html.find(TIKTOK_REHYDRATION_MARKER)
+    if start == -1:
+        return None
+    start += len(TIKTOK_REHYDRATION_MARKER)
+    end = html.find("</script>", start)
+    if end == -1:
+        return None
+    try:
+        data = json.loads(html[start:end])
+    except (ValueError, KeyError):
+        return None
+    scope = data.get("__DEFAULT_SCOPE__") or {}
+    video_detail = scope.get("webapp.video-detail") or {}
+    item = video_detail.get("itemInfo", {}).get("itemStruct")
+    return item if isinstance(item, dict) else None
+
+
+def _tiktok_best_video_url(video_obj: dict[str, Any]) -> str | None:
+    """Pick the highest-quality playable URL from a TikTok `video` object,
+    same approach used for TikTok's main post video (bitrateInfo first,
+    falling back to the plain playAddr)."""
+    grouped: dict[int, list[str]] = {}
+    bitrate_info = video_obj.get("bitrateInfo")
+    if bitrate_info:
+        if not isinstance(bitrate_info, list):
+            bitrate_info = [bitrate_info]
+        for entry in bitrate_info:
+            if not isinstance(entry, dict):
+                continue
+            play_addr = entry.get("PlayAddr") or {}
+            width = int(play_addr.get("Width") or 0)
+            height = int(play_addr.get("Height") or 0)
+            url_list = play_addr.get("UrlList") or []
+            if url_list:
+                grouped.setdefault(width * height, []).extend(url_list)
+    ordered: list[str] = []
+    for size in sorted(grouped, reverse=True):
+        ordered.extend(grouped[size])
+    if video_obj.get("playAddr"):
+        ordered.append(video_obj["playAddr"])
+    return ordered[0] if ordered else None
+
+
+def _tiktok_slideshow_items(url: str, timeout: int = 30) -> list[dict[str, Any]] | None:
+    """Per-image detection for a TikTok photo/slideshow post: each slide is
+    inspected on its own, so a carousel with some plain photos and some
+    'Foto Live' motion slides mixed together comes back correctly labelled
+    instead of collapsing everything into one type. Returns None (meaning
+    "could not tell, fall back to gallery-dl") if the page structure doesn't
+    match what we expect."""
+    try:
+        item = _tiktok_item_struct(url, timeout)
+    except Exception:
+        return None
+    if not item or "imagePost" not in item:
+        return None
+    images = item.get("imagePost", {}).get("images") or []
+    if not isinstance(images, list) or not images:
+        return None
+
+    results: list[dict[str, Any]] = []
+    for index, image in enumerate(images, start=1):
+        if not isinstance(image, dict):
+            continue
+        live_video = image.get("video")
+        video_url = _tiktok_best_video_url(live_video) if isinstance(live_video, dict) else None
+        if video_url:
+            results.append({"type": "video", "url": video_url, "index": index})
+            continue
+        image_url = None
+        image_url_obj = image.get("imageURL")
+        if isinstance(image_url_obj, dict):
+            url_list = image_url_obj.get("urlList") or []
+            image_url = url_list[0] if url_list else None
+        if image_url:
+            results.append({"type": "image", "url": image_url, "index": index})
+    return results or None
+
+
+def _download_tiktok_slideshow_native(
+    url: str,
+    output_dir: Path,
+    max_filesize: int | None,
+    log_callback: Callable[[str], None] | None,
+) -> tuple[list[Path], list[Path]] | None:
+    """Download a TikTok slideshow using per-image detection: plain slides
+    become .jpg, slides that have a 'Foto Live' motion clip become .mp4 —
+    automatically, item by item. Returns None if per-item detection wasn't
+    possible (caller should fall back to the gallery-dl based path)."""
+    items = _tiktok_slideshow_items(url)
+    if not items:
+        return None
+
+    photo_files: list[Path] = []
+    live_video_files: list[Path] = []
+    for entry in items:
+        index = entry["index"]
+        kind = entry["type"]
+        media_url = entry["url"]
+        if log_callback:
+            label = "Foto Live" if kind == "video" else "Foto"
+            log_callback(f"Mengunduh {label} {index}/{len(items)}...")
+        try:
+            if kind == "video":
+                output = _download_url_to_file(
+                    media_url,
+                    output_dir / f"FotoLive_{index:02d}",
+                    url,
+                    max_filesize,
+                    media_kind="video",
+                    extra_headers=TIKTOK_IMAGE_HEADERS,
+                )
+                live_video_files.append(output)
+            else:
+                output = _download_url_to_file(
+                    media_url,
+                    output_dir / f"Foto_{index:02d}",
+                    url,
+                    max_filesize,
+                    media_kind="image",
+                    extra_headers=TIKTOK_IMAGE_HEADERS,
+                )
+                photo_files.append(output)
+        except Exception as exc:
+            if log_callback:
+                log_callback(f"Gagal mengunduh item {index}: {exc}")
+    if not photo_files and not live_video_files:
+        return None
+    return photo_files, live_video_files
 
 
 def _run_gallery_dl(
@@ -919,8 +1078,6 @@ def _download_photo_post(
     platform = _platform_name(url)
     if platform == "YouTube":
         return _download_best_thumbnail(url, settings, log_callback)
-    if not detect_gallery_dl()[0]:
-        raise RuntimeError("gallery-dl belum terpasang. Gunakan requirements.txt versi final.")
 
     output_dir = settings.output_dir.expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -928,16 +1085,33 @@ def _download_photo_post(
     if progress_hook:
         progress_hook({"status": "downloading", "downloaded_bytes": 0})
 
+    files: list[Path] = []
+    live_video_files: list[Path] = []
     gallery_error: Exception | None = None
-    try:
-        _run_gallery_dl(url, output_dir, settings.max_filesize, log_callback)
-    except Exception as exc:
-        gallery_error = exc
-
-    extracted = _collect_output_files(output_dir, started_at)
-    files = [path for path in extracted if path.suffix.lower() in IMAGE_EXTENSIONS]
-    live_video_files = [path for path in extracted if path.suffix.lower() in VIDEO_EXTENSIONS]
     fallback_error: str | None = None
+
+    native_result = None
+    if platform == "TikTok":
+        if log_callback:
+            log_callback("Mendeteksi jenis tiap foto (foto biasa vs Foto Live)...")
+        native_result = _download_tiktok_slideshow_native(
+            url, output_dir, settings.max_filesize, log_callback
+        )
+
+    if native_result is not None:
+        files, live_video_files = native_result
+    else:
+        if not detect_gallery_dl()[0]:
+            raise RuntimeError("gallery-dl belum terpasang. Gunakan requirements.txt versi final.")
+        try:
+            _run_gallery_dl(url, output_dir, settings.max_filesize, log_callback)
+        except Exception as exc:
+            gallery_error = exc
+
+        extracted = _collect_output_files(output_dir, started_at)
+        files = [path for path in extracted if path.suffix.lower() in IMAGE_EXTENSIONS]
+        live_video_files = [path for path in extracted if path.suffix.lower() in VIDEO_EXTENSIONS]
+
     if not files and not live_video_files:
         image_urls, fallback_error = _gallery_image_urls(url)
         if image_urls:
