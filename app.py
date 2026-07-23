@@ -16,20 +16,18 @@ from downloader import (
     DownloadSettings,
     default_download_directory,
     detect_ffmpeg,
+    detect_gallery_dl,
     download_media,
     human_bytes,
     parse_urls,
     preview_media,
+    selected_format_summary,
     summarize_files,
     validate_public_url,
 )
 
 
-st.set_page_config(
-    page_title="Media Downloader",
-    page_icon="⬇️",
-    layout="wide",
-)
+st.set_page_config(page_title="Media Downloader", page_icon="⬇️", layout="wide")
 
 CLOUD_MODE = os.getenv("MEDIA_DOWNLOADER_CLOUD", "").lower() in {"1", "true", "yes"} or os.name != "nt"
 CLOUD_URL_LIMIT = 3
@@ -39,7 +37,6 @@ SESSION_ROOT = Path(tempfile.gettempdir()) / "media_downloader_sessions"
 
 
 def cleanup_old_sessions(max_age_hours: int = 12) -> None:
-    """Best-effort cleanup of stale temporary cloud downloads."""
     if not SESSION_ROOT.exists():
         return
     cutoff = time.time() - (max_age_hours * 3600)
@@ -71,30 +68,28 @@ def render_preview(data: dict[str, Any]) -> None:
     with left:
         if data.get("thumbnail"):
             st.image(data["thumbnail"], use_container_width=True)
+        else:
+            st.info("Pratinjau gambar tidak tersedia, tetapi URL tetap dapat dicoba.")
     with right:
         st.subheader(data.get("title", "Tanpa judul"))
+        st.write(f"**Jenis media:** {data.get('media_type', '-')}")
         st.write(f"**Pengunggah:** {data.get('uploader', '-')}")
         st.write(f"**Durasi:** {data.get('duration', '-')}")
         st.write(f"**Platform:** {data.get('extractor', '-')}")
         heights = data.get("available_heights") or []
-        resolution_text = ", ".join(f"{height}p" for height in heights[:12]) if heights else "Tidak terdeteksi"
-        st.write(f"**Resolusi tersedia:** {resolution_text}")
-        st.write(f"**Perkiraan ukuran kualitas tertinggi:** {data.get('estimated_best_size', 'Tidak tersedia')}")
+        resolution_text = ", ".join(f"{height}p" for height in heights[:10]) or "Tidak tersedia"
+        st.write(f"**Resolusi video tersedia:** {resolution_text}")
+        st.write(f"**Perkiraan kualitas tertinggi:** {data.get('estimated_best_size', 'Tidak tersedia')}")
 
-        size_estimates = data.get("size_estimates") or []
-        if size_estimates:
-            with st.expander("Lihat perkiraan ukuran per resolusi", expanded=False):
-                st.dataframe(size_estimates, use_container_width=True, hide_index=True)
-                st.caption(
-                    "Ukuran bersifat perkiraan berdasarkan metadata platform. "
-                    "Ukuran akhir dapat berubah setelah video dan audio digabungkan."
-                )
+    size_estimates = data.get("size_estimates") or []
+    if size_estimates:
+        with st.expander("Perkiraan ukuran per resolusi", expanded=False):
+            st.dataframe(size_estimates, use_container_width=True, hide_index=True)
+            st.caption("Nilai merupakan perkiraan dari metadata platform dan dapat berbeda setelah penggabungan.")
 
 
-def format_speed(value: Any) -> str:
-    if isinstance(value, (int, float)):
-        return f"{human_bytes(value)}/s"
-    return "-"
+def format_speed(value: int | float | None) -> str:
+    return f"{human_bytes(value)}/s" if value else "-"
 
 
 def make_progress_widgets(label: str):
@@ -109,7 +104,7 @@ def make_progress_widgets(label: str):
         if not clean:
             return
         logs.append(clean)
-        del logs[:-6]
+        del logs[:-8]
         log_box.code("\n".join(logs), language=None)
 
     def progress_hook(data: dict[str, Any]) -> None:
@@ -117,16 +112,16 @@ def make_progress_widgets(label: str):
         if status == "downloading":
             downloaded = data.get("downloaded_bytes") or 0
             total = data.get("total_bytes") or data.get("total_bytes_estimate")
-            ratio = min(downloaded / total, 1.0) if total else 0.0
+            ratio = min(downloaded / total, 1.0) if total else 0.05
             text = (
                 f"Mengunduh {human_bytes(downloaded)} / {human_bytes(total)} · "
                 f"{format_speed(data.get('speed'))} · ETA {data.get('eta', '-')} detik"
             )
             progress_bar.progress(ratio, text=text)
-            status_box.info("Sedang mengunduh stream media...")
+            status_box.info("Sedang mengunduh media...")
         elif status == "finished":
             progress_bar.progress(1.0, text="Data selesai diunduh. Memproses file...")
-            status_box.info("Menggabungkan atau mengonversi media dengan FFmpeg...")
+            status_box.info("Menyiapkan hasil akhir...")
         elif status == "error":
             status_box.error("Terjadi kegagalan saat mengunduh.")
 
@@ -150,7 +145,11 @@ def render_browser_downloads(results: list[dict[str, Any]]) -> None:
         if item.get("status") != "Berhasil":
             continue
         st.markdown(f"**{item.get('title', 'Media')}**")
-        for file_index, file_info in enumerate(item.get("files", [])):
+        files = sorted(
+            item.get("files", []),
+            key=lambda file_info: (0 if Path(file_info["path"]).suffix.lower() == ".zip" else 1, file_info["name"]),
+        )
+        for file_index, file_info in enumerate(files):
             path = Path(file_info["path"])
             if not path.exists() or not path.is_file():
                 st.warning(f"File sementara sudah tidak tersedia: {path.name}")
@@ -169,20 +168,20 @@ def render_browser_downloads(results: list[dict[str, Any]]) -> None:
 cleanup_old_sessions()
 
 st.title("⬇️ Media Downloader")
-st.caption("Unduh media publik yang Anda miliki atau telah mendapat izin untuk menyimpannya.")
+st.caption("Video, audio, foto/carousel, dan Foto Live dari media publik yang Anda miliki atau diizinkan untuk disimpan.")
 
 with st.expander("Batas penggunaan", expanded=False):
     st.markdown(
         """
-        Aplikasi ini tidak dirancang untuk membobol DRM, paywall, akun privat, atau pembatasan akses.
-        Ketersediaan format bergantung pada media yang disediakan oleh platform. Gunakan hanya untuk
-        konten milik sendiri, domain publik, berlisensi bebas, atau yang telah diizinkan pemiliknya.
+        Aplikasi tidak dirancang untuk membobol DRM, paywall, akun privat, atau pembatasan akses.
+        Ketersediaan dan kualitas format bergantung pada media yang benar-benar disediakan platform.
+        Gunakan hanya untuk konten milik sendiri, domain publik, berlisensi bebas, atau yang telah diizinkan pemiliknya.
         """
     )
 
 if CLOUD_MODE:
     st.info(
-        "Mode server aktif. File diproses sementara di server, lalu harus diunduh melalui tombol di browser. "
+        "Mode server aktif. File diproses sementara lalu diunduh melalui tombol browser. "
         "Maksimal 3 URL per proses dan sekitar 300 MB per file."
     )
 
@@ -227,24 +226,57 @@ with main_tab:
     left, right = st.columns(2)
 
     with left:
-        output_kind_label = st.radio("Jenis hasil", ["Video", "Audio"], horizontal=True)
+        output_kind_label = st.radio(
+            "Jenis hasil",
+            ["Video", "Audio", "Foto", "Foto Live"],
+            horizontal=True,
+        )
+
+        container = "mp4"
+        resolution_label = "Terbaik tersedia"
+        audio_format = "original"
+        bitrate = "320"
+        photo_archive = True
+        live_photo_format = "bundle"
+        live_photo_duration = 3
 
         if output_kind_label == "Video":
             container = st.selectbox("Kontainer", ["mp4", "mkv"], format_func=str.upper)
             resolution_options = ["Terbaik tersedia", "2160p", "1440p", "1080p", "720p", "480p", "360p"]
-            default_resolution_index = 4 if CLOUD_MODE else 0
-            resolution_label = st.selectbox("Batas resolusi", resolution_options, index=default_resolution_index)
-            audio_format = "original"
-            bitrate = "320"
-        else:
+            resolution_label = st.selectbox("Batas resolusi", resolution_options, index=0)
+            if container == "mkv":
+                st.caption("MKV direkomendasikan untuk mempertahankan kombinasi codec terbaik tanpa re-encode.")
+            else:
+                st.caption("MP4 memilih stream terbaik; kompatibilitas bergantung pada codec sumber.")
+
+        elif output_kind_label == "Audio":
             audio_choice = st.selectbox("Format audio", ["MP3", "Audio asli (M4A/Opus/WebM sesuai sumber)"])
-            container = "mp4"
-            resolution_label = "Terbaik tersedia"
             audio_format = "mp3" if audio_choice == "MP3" else "original"
             bitrate = (
                 st.selectbox("Bitrate MP3", ["320", "256", "192", "128"], index=0)
                 if audio_format == "mp3"
                 else "320"
+            )
+
+        elif output_kind_label == "Foto":
+            photo_archive = st.checkbox("Buat ZIP yang berisi semua foto", value=True)
+            st.caption(
+                "TikTok/Instagram: mengunduh semua foto pada posting atau carousel. "
+                "YouTube: mengunduh thumbnail beresolusi tertinggi."
+            )
+
+        else:
+            live_choice = st.selectbox(
+                "Format Foto Live",
+                ["Paket ZIP (JPG + MOV)", "WebP animasi"],
+            )
+            live_photo_format = "bundle" if live_choice.startswith("Paket") else "webp"
+            live_photo_duration = st.selectbox("Durasi gerak", [3, 5, 10, 15], index=0, format_func=lambda value: f"{value} detik")
+            resolution_options = ["Terbaik tersedia", "2160p", "1440p", "1080p", "720p"]
+            resolution_label = st.selectbox("Batas resolusi sumber", resolution_options, index=0)
+            st.caption(
+                "Foto Live dibuat dari URL video/Reel/TikTok video. Paket ZIP berisi gambar JPG dan klip MOV; "
+                "WebP dapat bergerak langsung di aplikasi yang mendukungnya."
             )
 
     with right:
@@ -266,17 +298,33 @@ with main_tab:
             )
 
         ffmpeg_ok, detected_path = detect_ffmpeg(ffmpeg_location_text or None)
-        ffmpeg_required = output_kind_label == "Video" or audio_format == "mp3"
+        gallery_ok, gallery_version = detect_gallery_dl()
+        ffmpeg_required = (
+            output_kind_label in {"Video", "Foto Live"}
+            or (output_kind_label == "Audio" and audio_format == "mp3")
+        )
+        gallery_required = output_kind_label == "Foto"
+
         if ffmpeg_ok:
-            source_label = "portable" if detected_path and ("imageio_ffmpeg" in detected_path or "media_downloader_ffmpeg" in detected_path) else "sistem"
+            source_label = (
+                "portable"
+                if detected_path and ("imageio_ffmpeg" in detected_path or "media_downloader_ffmpeg" in detected_path)
+                else "sistem"
+            )
             st.success(f"FFmpeg terdeteksi ({source_label}): {detected_path}")
         elif ffmpeg_required:
             st.warning(
-                "FFmpeg belum terdeteksi. Video dan MP3 memerlukannya. "
-                "Pada Streamlit Cloud, pastikan packages.txt dan requirements.txt berada di root repository."
+                "FFmpeg belum terdeteksi. Video, MP3, dan Foto Live memerlukannya. "
+                "Pastikan packages.txt serta requirements.txt berada di root repository."
             )
         else:
-            st.info("Audio asli dapat diunduh tanpa konversi FFmpeg.")
+            st.info("Mode yang dipilih tidak membutuhkan konversi FFmpeg.")
+
+        if gallery_required:
+            if gallery_ok:
+                st.success(f"gallery-dl terdeteksi: {gallery_version}")
+            else:
+                st.warning("gallery-dl belum terdeteksi. Gunakan requirements.txt dari ZIP final.")
 
         consent = st.checkbox("Saya memiliki hak atau izin untuk mengunduh media tersebut.", value=False)
 
@@ -305,11 +353,17 @@ with main_tab:
                 raise ValueError("Folder penyimpanan tidak boleh kosong.")
 
             resolution = None
-            if output_kind_label == "Video" and resolution_label != "Terbaik tersedia":
+            if output_kind_label in {"Video", "Foto Live"} and resolution_label != "Terbaik tersedia":
                 resolution = int(resolution_label.rstrip("p"))
 
+            output_kind_map = {
+                "Video": "video",
+                "Audio": "audio",
+                "Foto": "photo",
+                "Foto Live": "live_photo",
+            }
             settings = DownloadSettings(
-                output_kind=output_kind_label.lower(),
+                output_kind=output_kind_map[output_kind_label],
                 container=container,
                 resolution=resolution,
                 audio_format=audio_format,
@@ -317,13 +371,18 @@ with main_tab:
                 output_dir=output_dir,
                 ffmpeg_location=ffmpeg_location_text.strip() or detected_path,
                 max_filesize=CLOUD_MAX_FILE_BYTES if CLOUD_MODE else None,
+                photo_archive=photo_archive,
+                live_photo_format=live_photo_format,
+                live_photo_duration=live_photo_duration,
             )
 
             if ffmpeg_required and not ffmpeg_ok:
                 raise RuntimeError(
-                    "FFmpeg diperlukan untuk video atau MP3. Pastikan packages.txt dan requirements.txt "
-                    "berada di root repository, lalu reboot aplikasi Streamlit Cloud."
+                    "FFmpeg diperlukan untuk mode ini. Pastikan packages.txt dan requirements.txt berada di root repository, "
+                    "lalu reboot aplikasi Streamlit Cloud."
                 )
+            if gallery_required and not gallery_ok:
+                raise RuntimeError("gallery-dl belum terpasang. Upload requirements.txt dari ZIP final lalu reboot aplikasi.")
 
             if CLOUD_MODE:
                 remove_session_files()
@@ -336,6 +395,9 @@ with main_tab:
                     output_dir=get_session_download_dir(),
                     ffmpeg_location=settings.ffmpeg_location,
                     max_filesize=settings.max_filesize,
+                    photo_archive=settings.photo_archive,
+                    live_photo_format=settings.live_photo_format,
+                    live_photo_duration=settings.live_photo_duration,
                 )
 
             all_results: list[dict[str, Any]] = []
@@ -355,9 +417,8 @@ with main_tab:
                     )
                     progress_bar.progress(1.0, text="Selesai")
                     file_rows = summarize_files(files)
-                    total_size_bytes = sum(
-                        path.stat().st_size for path in files if path.exists() and path.is_file()
-                    )
+                    total_size_bytes = sum(path.stat().st_size for path in files if path.exists() and path.is_file())
+                    actual_format = selected_format_summary(info)
                     status_box.success(
                         f"Berhasil: {info.get('title', 'media')} · Total {human_bytes(total_size_bytes)}"
                     )
@@ -367,9 +428,11 @@ with main_tab:
                             "title": info.get("title") or "Tanpa judul",
                             "status": "Berhasil",
                             "files": file_rows,
+                            "format": actual_format,
                         }
                     )
                     successes += 1
+                    st.dataframe([actual_format], use_container_width=True, hide_index=True)
                     if file_rows:
                         st.dataframe(file_rows, use_container_width=True, hide_index=True)
                     else:
@@ -408,24 +471,33 @@ with guide_tab:
     st.markdown(
         """
         1. Tempel URL publik YouTube, TikTok, atau Instagram, satu URL per baris.
-        2. Pilih **Video** atau **Audio**.
-        3. Untuk video, tentukan MP4/MKV dan batas resolusi.
-        4. Untuk audio, pilih MP3 atau format audio sumber tanpa konversi.
+        2. Pilih **Video**, **Audio**, **Foto**, atau **Foto Live**.
+        3. **Foto** mengambil seluruh gambar carousel TikTok/Instagram; untuk YouTube, mode ini mengambil thumbnail terbaik.
+        4. **Foto Live** memerlukan URL video dan menghasilkan ZIP JPG+MOV atau WebP animasi.
         5. Centang pernyataan izin, lalu klik **Mulai Download**.
-        6. Pada versi online, klik tombol hasil untuk menyimpan file ke perangkat Anda.
+        6. Pada versi online, klik tombol hasil untuk menyimpan file ke perangkat.
         """
     )
 
     st.subheader("Catatan kualitas dan server")
     st.markdown(
         """
-        - “Terbaik tersedia” adalah kualitas tertinggi yang platform sediakan, bukan file master kamera.
-        - MP3 selalu merupakan hasil konversi. Pilih **Audio asli** untuk menghindari konversi.
-        - File pada server bersifat sementara dan dapat hilang ketika aplikasi dimulai ulang.
-        - Video privat, berbayar, dilindungi DRM, dibatasi wilayah, atau membutuhkan login tidak diproses.
-        - Hosting gratis dapat membatasi RAM, CPU, durasi proses, ukuran file, dan akses dari IP pusat data.
+        - “Terbaik tersedia” memilih stream terbaik yang platform sediakan, bukan file master kamera.
+        - Foto TikTok/Instagram diambil oleh **gallery-dl** pada versi resolusi tertinggi yang endpoint platform sediakan.
+        - Paket **Foto Live JPG+MOV** adalah pasangan gambar dan klip gerak portabel. Sebagian perangkat iPhone mungkin memerlukan aplikasi impor Live Photo agar dikenali sebagai satu item Live Photo native.
+        - Foto Live dibuat ulang dari video sehingga prosesnya melibatkan encoding; video biasa tetap dipertahankan tanpa sengaja melakukan re-encode ketika memungkinkan.
+        - Gunakan **MKV** untuk peluang terbesar mempertahankan kombinasi codec video/audio terbaik.
+        - Mode server membatasi file sekitar 300 MB. File besar lebih cocok dijalankan lokal, Render berbayar, atau VPS.
+        - Video/post privat, berbayar, dilindungi DRM, dibatasi wilayah, atau membutuhkan login tidak diproses.
+        - Instagram dan TikTok dapat mengubah endpoint kapan saja; perbarui `yt-dlp` dan `gallery-dl` bila ekstraksi mulai gagal.
         """
     )
 
     st.subheader("Versi komponen")
-    st.code(f"Streamlit: {st.__version__}\nyt-dlp: {yt_dlp.version.__version__}", language=None)
+    gallery_ok, gallery_version = detect_gallery_dl()
+    st.code(
+        f"Streamlit: {st.__version__}\n"
+        f"yt-dlp: {yt_dlp.version.__version__}\n"
+        f"gallery-dl: {gallery_version if gallery_ok else 'tidak terpasang'}",
+        language=None,
+    )
