@@ -259,9 +259,12 @@ def _gallery_common_args() -> list[str]:
     ]
 
 
-def _gallery_image_urls(url: str, timeout: int = 45) -> list[str]:
-    if not detect_gallery_dl()[0] or _platform_name(url) == "YouTube":
-        return []
+def _gallery_image_urls(url: str, timeout: int = 45) -> tuple[list[str], str | None]:
+    """Return (image_urls, error_detail). error_detail is None on a clean run."""
+    if not detect_gallery_dl()[0]:
+        return [], "gallery-dl tidak terpasang di server."
+    if _platform_name(url) == "YouTube":
+        return [], None
     command = _gallery_common_args() + ["--get-urls", url]
     try:
         process = subprocess.run(
@@ -272,14 +275,63 @@ def _gallery_image_urls(url: str, timeout: int = 45) -> list[str]:
             errors="replace",
             timeout=timeout,
         )
-    except (OSError, subprocess.TimeoutExpired):
-        return []
+    except subprocess.TimeoutExpired:
+        return [], f"gallery-dl timeout setelah {timeout} detik saat mengambil URL foto."
+    except OSError as exc:
+        return [], f"gallery-dl gagal dijalankan: {exc}"
+
     lines = []
     for raw in (process.stdout or "").splitlines():
         value = raw.strip()
         if value.startswith(("http://", "https://")):
             lines.append(value)
-    return list(dict.fromkeys(lines))
+    deduped = list(dict.fromkeys(lines))
+
+    if not deduped:
+        stderr_tail = (process.stderr or "").strip()
+        if not stderr_tail:
+            stderr_tail = (process.stdout or "").strip()
+        detail = stderr_tail[-500:] if stderr_tail else f"gallery-dl keluar dengan kode {process.returncode} tanpa output."
+        return [], detail
+
+    return deduped, None
+
+
+TIKTOK_IMAGE_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Referer": "https://www.tiktok.com/",
+}
+
+INSTAGRAM_IMAGE_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Referer": "https://www.instagram.com/",
+}
+
+
+def _preview_headers_for_platform(platform: str) -> dict[str, str]:
+    if platform == "TikTok":
+        return TIKTOK_IMAGE_HEADERS
+    if platform == "Instagram":
+        return INSTAGRAM_IMAGE_HEADERS
+    return {"User-Agent": TIKTOK_IMAGE_HEADERS["User-Agent"]}
+
+
+def fetch_preview_image_bytes(media_url: str, platform: str, timeout: int = 20) -> bytes | None:
+    """Download an image server-side (with the right Referer) so it can be shown
+    in the UI even though the CDN blocks hotlinking / direct browser access."""
+    headers = _preview_headers_for_platform(platform)
+    request = Request(media_url, headers=headers)
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            return response.read()
+    except Exception:
+        return None
 
 
 def _extract_ydl_info(url: str) -> dict[str, Any]:
@@ -326,8 +378,9 @@ def preview_media(url: str) -> dict[str, Any]:
         raise ValueError(reason)
 
     platform = _platform_name(url)
+    gallery_error: str | None = None
     if platform in {"TikTok", "Instagram"}:
-        image_urls = _gallery_image_urls(url)
+        image_urls, gallery_error = _gallery_image_urls(url)
         if image_urls:
             slug = _safe_filename(Path(urlparse(url).path.rstrip("/")).name or "Posting foto")
             return {
@@ -337,6 +390,7 @@ def preview_media(url: str) -> dict[str, Any]:
                 "duration": "-",
                 "thumbnail": image_urls[0],
                 "preview_images": image_urls[:12],
+                "preview_image_platform": platform,
                 "photo_count": len(image_urls),
                 "preview_video_url": None,
                 "webpage_url": url,
@@ -351,6 +405,9 @@ def preview_media(url: str) -> dict[str, Any]:
     try:
         info = _extract_ydl_info(url)
     except Exception as exc:
+        combined_error = str(exc)
+        if gallery_error:
+            combined_error = f"{combined_error} | gallery-dl: {gallery_error}"
         return {
             "id": None,
             "title": f"Media {platform}",
@@ -367,7 +424,7 @@ def preview_media(url: str) -> dict[str, Any]:
             "size_estimates": [],
             "media_type": "Belum dapat dipastikan",
             "detected_kind": "unknown",
-            "preview_error": str(exc),
+            "preview_error": combined_error,
         }
 
     formats = [fmt for fmt in info.get("formats", []) if isinstance(fmt, dict)]
@@ -627,12 +684,16 @@ def _run_gallery_dl(
         errors="replace",
     )
     assert process.stdout is not None
+    collected_lines: list[str] = []
     for line in process.stdout:
         clean = line.strip()
-        if clean and log_callback:
-            log_callback(clean)
+        if clean:
+            collected_lines.append(clean)
+            if log_callback:
+                log_callback(clean)
     if process.wait() != 0:
-        raise RuntimeError("gallery-dl gagal mengekstrak posting foto.")
+        tail = " | ".join(collected_lines[-5:]) if collected_lines else "tidak ada output."
+        raise RuntimeError(f"gallery-dl gagal mengekstrak posting foto. Detail: {tail}"[:700])
 
 
 def _download_direct_images(
@@ -720,13 +781,22 @@ def _download_photo_post(
         for path in _collect_output_files(output_dir, started_at)
         if path.suffix.lower() in IMAGE_EXTENSIONS
     ]
+    fallback_error: str | None = None
     if not files:
-        image_urls = _gallery_image_urls(url)
+        image_urls, fallback_error = _gallery_image_urls(url)
         if image_urls:
             files = _download_direct_images(image_urls, output_dir, url, settings.max_filesize, log_callback)
     if not files:
-        detail = f" Detail: {gallery_error}" if gallery_error else ""
-        raise RuntimeError(f"Tidak ada foto yang ditemukan pada posting publik ini.{detail}")
+        detail_parts = []
+        if gallery_error:
+            detail_parts.append(f"gallery-dl (download): {gallery_error}")
+        if fallback_error:
+            detail_parts.append(f"gallery-dl (get-urls): {fallback_error}")
+        detail = f" Detail: {' | '.join(detail_parts)}" if detail_parts else ""
+        raise RuntimeError(
+            "Tidak ada foto yang ditemukan pada posting publik ini. Kemungkinan link privat/dihapus, "
+            f"atau TikTok/Instagram mengubah struktur halamannya sehingga gallery-dl gagal mengekstrak.{detail}"
+        )
 
     files = sorted(set(files), key=lambda path: path.name.lower())
     if settings.quality_mode == "hd":

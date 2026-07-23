@@ -22,6 +22,7 @@ from downloader import (
     detect_ffmpeg,
     detect_gallery_dl,
     download_media,
+    fetch_preview_image_bytes,
     human_bytes,
     parse_urls,
     preview_media,
@@ -91,16 +92,22 @@ def render_preview(data: dict[str, Any], selected_mode: str) -> None:
         st.info("URL ini berisi video. Mode Foto akan mengambil thumbnail dengan resolusi tertinggi.")
 
     preview_images = [url for url in data.get("preview_images", []) if url]
+    preview_platform = data.get("preview_image_platform") or data.get("extractor") or "-"
     if preview_images:
         st.markdown(f"#### Pratinjau foto ({data.get('photo_count') or len(preview_images)} terdeteksi)")
         for start in range(0, len(preview_images), 3):
             columns = st.columns(3)
             for offset, image_url in enumerate(preview_images[start : start + 3]):
                 with columns[offset]:
-                    try:
-                        st.image(image_url, caption=f"Foto {start + offset + 1}", use_container_width=True)
-                    except Exception:
-                        st.warning(f"Pratinjau foto {start + offset + 1} tidak dapat dimuat.")
+                    image_bytes = fetch_preview_image_bytes(image_url, str(preview_platform))
+                    if image_bytes:
+                        st.image(image_bytes, caption=f"Foto {start + offset + 1}", use_container_width=True)
+                    else:
+                        st.warning(
+                            f"Foto {start + offset + 1}: CDN menolak permintaan pratinjau "
+                            "(kemungkinan link privat atau kadaluarsa). Coba tetap unduh — proses "
+                            "download memakai header yang sama dan sering tetap berhasil."
+                        )
     else:
         left, right = st.columns([1, 2])
         with left:
@@ -127,7 +134,7 @@ def render_preview(data: dict[str, Any], selected_mode: str) -> None:
             st.caption("Ukuran dapat berubah setelah stream video dan audio digabungkan.")
 
     if data.get("preview_error"):
-        st.caption(f"Catatan deteksi: {data['preview_error']}")
+        st.warning(f"Catatan deteksi: {data['preview_error']}")
 
 
 def format_speed(value: int | float | None) -> str:
