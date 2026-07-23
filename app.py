@@ -34,89 +34,184 @@ from downloader import (
 
 st.set_page_config(page_title="Media Downloader", page_icon="⬇️", layout="wide")
 
-CUSTOM_CSS = """
+if "dark_mode" not in st.session_state:
+    st.session_state.dark_mode = False
+
+
+def build_custom_css(dark: bool) -> str:
+    if dark:
+        palette = {
+            "bg": "#14151F",
+            "panel": "#1B1D2B",
+            "panel_alt": "#20223333",
+            "ink": "#EEEEF7",
+            "muted": "#A8ACC4",
+            "line": "#31344A",
+            "iris": "#9B8CFB",
+            "iris_soft": "#2A2650",
+            "teal": "#33D6C0",
+            "input_bg": "#232538",
+        }
+    else:
+        palette = {
+            "bg": "#FAFAFC",
+            "panel": "#FFFFFF",
+            "panel_alt": "#F6F4FD",
+            "ink": "#1E2130",
+            "muted": "#5B5F73",
+            "line": "#E4E1F2",
+            "iris": "#6C5CE7",
+            "iris_soft": "#EFEBFD",
+            "teal": "#12A594",
+            "input_bg": "#FFFFFF",
+        }
+    p = palette
+    return f"""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Sora:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap');
 
-html, body, [class*="css"]  { font-family: 'Inter', sans-serif; }
+:root {{
+    --md-bg: {p['bg']};
+    --md-panel: {p['panel']};
+    --md-panel-alt: {p['panel_alt']};
+    --md-ink: {p['ink']};
+    --md-muted: {p['muted']};
+    --md-line: {p['line']};
+    --md-iris: {p['iris']};
+    --md-iris-soft: {p['iris_soft']};
+    --md-teal: {p['teal']};
+    --md-input-bg: {p['input_bg']};
+}}
 
-:root {
-    --md-ink: #1E2130;
-    --md-iris: #6C5CE7;
-    --md-iris-soft: #EFEBFD;
-    --md-teal: #12A594;
-    --md-paper: #FAFAFC;
-    --md-line: #E4E1F2;
-}
+html, body, [class*="css"] {{ font-family: 'Inter', sans-serif; }}
 
-.block-container { padding-top: 2rem; max-width: 1180px; }
+/* Force our own background/text everywhere so the OS/browser dark-mode
+   preference can never leave light-mode text unreadable on a dark
+   background (or vice versa) -- the in-app toggle is the single source
+   of truth for which palette is active. */
+[data-testid="stAppViewContainer"], .main, body {{
+    background: var(--md-bg) !important;
+    color: var(--md-ink) !important;
+}}
+[data-testid="stHeader"] {{ background: transparent !important; }}
+
+.block-container {{ padding-top: 2rem; max-width: 1180px; }}
+
+p, span, div, label, li, .stMarkdown, .stCaption {{ color: var(--md-ink); }}
+.stCaption, small, [data-testid="stCaptionContainer"] {{ color: var(--md-muted) !important; }}
 
 /* Hero */
-.md-hero { display:flex; align-items:center; gap:14px; margin-bottom: 0.15rem; }
-.md-hero .md-badge {
+.md-hero {{ display:flex; align-items:center; gap:14px; margin-bottom: 0.15rem; }}
+.md-hero .md-badge {{
     display:flex; align-items:center; justify-content:center;
     width: 46px; height: 46px; border-radius: 14px;
     background: linear-gradient(135deg, var(--md-iris), var(--md-teal));
     font-size: 22px; flex-shrink: 0;
-}
-.md-hero h1 {
+}}
+.md-hero h1 {{
     font-family: 'Sora', sans-serif; font-weight: 800; letter-spacing: -0.02em;
-    font-size: 2.05rem; margin: 0; color: var(--md-ink);
-}
-.md-subtitle { color: #5B5F73; font-size: 0.98rem; margin: 0.15rem 0 1.3rem 62px; }
+    font-size: 2.05rem; margin: 0; color: var(--md-ink) !important;
+}}
+.md-subtitle {{ color: var(--md-muted) !important; font-size: 0.98rem; margin: 0.15rem 0 1.3rem 62px; }}
 
 /* Step headers */
-.md-step { display:flex; align-items:center; gap:10px; margin: 0.4rem 0 0.7rem 0; }
-.md-step .md-step-num {
+.md-step {{ display:flex; align-items:center; gap:10px; margin: 0.4rem 0 0.7rem 0; }}
+.md-step .md-step-num {{
     display:flex; align-items:center; justify-content:center;
     width: 26px; height: 26px; border-radius: 50%;
-    background: var(--md-iris); color: white; font-weight: 700; font-size: 0.82rem;
+    background: var(--md-iris); color: white !important; font-weight: 700; font-size: 0.82rem;
     font-family: 'Sora', sans-serif; flex-shrink: 0;
-}
-.md-step .md-step-title {
-    font-family: 'Sora', sans-serif; font-weight: 700; font-size: 1.12rem; color: var(--md-ink);
-}
-.md-step .md-step-hint { color: #7A7E91; font-size: 0.86rem; margin-left: 36px; }
+}}
+.md-step .md-step-title {{
+    font-family: 'Sora', sans-serif; font-weight: 700; font-size: 1.12rem; color: var(--md-ink) !important;
+}}
+.md-step .md-step-hint {{ color: var(--md-muted) !important; font-size: 0.86rem; margin-left: 36px; }}
 
 /* Chips used for media-type labelling in the guide */
-.md-chip {
+.md-chip {{
     display:inline-flex; align-items:center; gap:6px;
-    background: var(--md-iris-soft); color: var(--md-iris);
+    background: var(--md-iris-soft); color: var(--md-iris) !important;
     border-radius: 999px; padding: 4px 12px; font-size: 0.83rem; font-weight: 600;
     margin: 2px 6px 2px 0;
-}
+}}
 
 /* Bordered containers -> soft cards */
-div[data-testid="stVerticalBlockBorderWrapper"] {
+div[data-testid="stVerticalBlockBorderWrapper"] {{
     border-radius: 16px !important;
     border: 1px solid var(--md-line) !important;
-    background: white;
-}
+    background: var(--md-panel) !important;
+}}
+
+/* Text areas / inputs / selects need explicit theming too, otherwise they
+   inherit the browser's native dark/light control chrome. */
+.stTextArea textarea, .stTextInput input, .stNumberInput input {{
+    background: var(--md-input-bg) !important;
+    color: var(--md-ink) !important;
+    border-color: var(--md-line) !important;
+}}
+[data-baseweb="select"] > div {{
+    background: var(--md-input-bg) !important;
+    color: var(--md-ink) !important;
+    border-color: var(--md-line) !important;
+}}
+[data-baseweb="popover"] {{ background: var(--md-panel) !important; }}
+.stSlider [data-baseweb="slider"] {{ color: var(--md-iris); }}
 
 /* Buttons */
-.stButton > button, .stDownloadButton > button {
+.stButton > button, .stDownloadButton > button {{
     border-radius: 10px !important;
     font-weight: 600 !important;
-}
-.stButton > button[kind="primary"] {
-    background: linear-gradient(135deg, var(--md-iris), #8B6CF0) !important;
+    background: var(--md-panel) !important;
+    color: var(--md-ink) !important;
+    border: 1px solid var(--md-line) !important;
+}}
+.stButton > button[kind="primary"] {{
+    background: linear-gradient(135deg, var(--md-iris), var(--md-teal)) !important;
+    color: white !important;
     border: none !important;
-}
+}}
 
 /* Radio pills */
-div[role="radiogroup"] { gap: 6px; }
-div[role="radiogroup"] label {
+div[role="radiogroup"] {{ gap: 6px; }}
+div[role="radiogroup"] label {{
     background: var(--md-iris-soft); border-radius: 999px; padding: 6px 14px !important;
-    margin-right: 4px;
-}
+    margin-right: 4px; color: var(--md-ink) !important;
+}}
+
+/* Checkboxes / toggles */
+.stCheckbox label, .stToggle label {{ color: var(--md-ink) !important; }}
 
 /* Tabs */
-.stTabs [data-baseweb="tab"] { font-weight: 600; font-family: 'Sora', sans-serif; }
+.stTabs [data-baseweb="tab"] {{ font-weight: 600; font-family: 'Sora', sans-serif; color: var(--md-ink) !important; }}
+.stTabs [data-baseweb="tab-panel"] {{ color: var(--md-ink); }}
 
-hr { border-color: var(--md-line) !important; }
+/* Alert boxes keep Streamlit's own accessible colors; only round the corners */
+[data-testid="stAlert"] {{ border-radius: 12px; }}
+
+/* Code / dataframe panels */
+.stCodeBlock, [data-testid="stTable"], [data-testid="stDataFrame"] {{
+    background: var(--md-panel-alt) !important;
+    border-radius: 12px;
+}}
+
+hr {{ border-color: var(--md-line) !important; }}
 </style>
 """
-st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+
+
+st.markdown(build_custom_css(st.session_state.dark_mode), unsafe_allow_html=True)
+
+_top_spacer, _top_toggle = st.columns([6, 1])
+with _top_toggle:
+    dark_choice = st.toggle(
+        "🌙 Gelap" if st.session_state.dark_mode else "🌞 Terang",
+        value=st.session_state.dark_mode,
+        key="dark_mode_toggle",
+        help="Ganti tampilan terang/gelap.",
+    )
+if dark_choice != st.session_state.dark_mode:
+    st.session_state.dark_mode = dark_choice
+    st.rerun()
 
 
 def step_header(number: int, title: str, hint: str = "") -> None:
