@@ -100,9 +100,14 @@ def render_preview(data: dict[str, Any], selected_mode: str) -> None:
             for offset, image_url in enumerate(preview_images[start : start + 3]):
                 with columns[offset]:
                     image_bytes = fetch_preview_image_bytes(image_url, str(preview_platform))
+                    shown = False
                     if image_bytes:
-                        st.image(image_bytes, caption=f"Foto {start + offset + 1}", use_container_width=True)
-                    else:
+                        try:
+                            st.image(image_bytes, caption=f"Foto {start + offset + 1}", use_container_width=True)
+                            shown = True
+                        except Exception:
+                            shown = False
+                    if not shown:
                         st.warning(
                             f"Foto {start + offset + 1}: CDN menolak permintaan pratinjau "
                             "(kemungkinan link privat atau kadaluarsa). Coba tetap unduh — proses "

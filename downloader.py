@@ -322,16 +322,48 @@ def _preview_headers_for_platform(platform: str) -> dict[str, str]:
     return {"User-Agent": TIKTOK_IMAGE_HEADERS["User-Agent"]}
 
 
+def _looks_like_image(data: bytes, content_type: str | None) -> bool:
+    if content_type and not content_type.split(";", 1)[0].strip().lower().startswith("image/"):
+        return False
+    if len(data) < 12:
+        return False
+    signatures = (
+        b"\xff\xd8\xff",  # JPEG
+        b"\x89PNG\r\n\x1a\n",  # PNG
+        b"GIF87a",
+        b"GIF89a",
+        b"RIFF",  # WEBP (RIFF....WEBP)
+        b"\x00\x00\x00\x18ftypavif",  # AVIF (rough)
+        b"\x00\x00\x00\x1cftypavif",
+        b"\x00\x00\x00 ftypavif",
+    )
+    if data[:3] == b"\xff\xd8\xff" or data[:8] == b"\x89PNG\r\n\x1a\n":
+        return True
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return True
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return True
+    if b"ftypavif" in data[:32] or b"ftypheic" in data[:32]:
+        return True
+    return False
+
+
 def fetch_preview_image_bytes(media_url: str, platform: str, timeout: int = 20) -> bytes | None:
     """Download an image server-side (with the right Referer) so it can be shown
-    in the UI even though the CDN blocks hotlinking / direct browser access."""
+    in the UI even though the CDN blocks hotlinking / direct browser access.
+    Returns None if the response isn't actually a decodable image (e.g. TikTok
+    returned an HTML error/captcha page instead of the photo)."""
     headers = _preview_headers_for_platform(platform)
     request = Request(media_url, headers=headers)
     try:
         with urlopen(request, timeout=timeout) as response:
-            return response.read()
+            content_type = response.headers.get("Content-Type")
+            data = response.read()
     except Exception:
         return None
+    if not data or not _looks_like_image(data, content_type):
+        return None
+    return data
 
 
 def _extract_ydl_info(url: str) -> dict[str, Any]:
