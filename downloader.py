@@ -60,6 +60,7 @@ class DownloadSettings:
     live_photo_duration: int = 3
     live_photo_archive: bool = True
     clip_duration: float | None = None
+    photo_live_seconds_per_photo: float = 2.5
 
 
 class StreamlitLogger:
@@ -257,6 +258,59 @@ def _gallery_common_args() -> list[str]:
         "-o",
         "extractor.instagram.videos=false",
     ]
+
+
+def _gallery_audio_args() -> list[str]:
+    """gallery-dl invocation that fetches ONLY the background music/audio of a
+    TikTok photo post (used to build the 'Foto Live' photo+music video)."""
+    audio_filter = "extension and extension.lower() in ('mp3','m4a','aac','wav','opus','ogg')"
+    return [
+        sys.executable,
+        "-m",
+        "gallery_dl",
+        "--config-ignore",
+        "--no-input",
+        "--no-colors",
+        "--windows-filenames",
+        "--filter",
+        audio_filter,
+        "-o",
+        "output.fallback=false",
+        "-o",
+        "extractor.tiktok.photos=false",
+        "-o",
+        "extractor.tiktok.audio=true",
+        "-o",
+        "extractor.tiktok.covers=false",
+    ]
+
+
+def _download_post_audio(url: str, output_dir: Path, timeout: int = 60) -> Path | None:
+    """Best-effort download of the original background music of a TikTok photo
+    post. Returns the audio file path, or None if unavailable (e.g. licensed
+    music that TikTok blocks from direct download, or an Instagram post)."""
+    if _platform_name(url) != "TikTok" or not detect_gallery_dl()[0]:
+        return None
+    audio_dir = output_dir / f".audio_{uuid.uuid4().hex}"
+    audio_dir.mkdir(parents=True, exist_ok=True)
+    command = _gallery_audio_args() + ["--directory", str(audio_dir), "--filename", "/O", url]
+    try:
+        process = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if process.returncode != 0:
+        return None
+    audio_files = [
+        path for path in audio_dir.rglob("*") if path.is_file() and path.suffix.lower() in AUDIO_EXTENSIONS
+    ]
+    return max(audio_files, key=lambda path: path.stat().st_size) if audio_files else None
 
 
 def _gallery_image_urls(url: str, timeout: int = 45) -> tuple[list[str], str | None]:
@@ -784,11 +838,74 @@ def _archive_files(files: list[Path], destination: Path) -> Path:
     return destination
 
 
+def _build_photo_live_slideshow(
+    photo_files: list[Path],
+    audio_path: Path,
+    destination: Path,
+    ffmpeg_path: str,
+    seconds_per_photo: float = 2.5,
+    log_callback: Callable[[str], None] | None = None,
+) -> Path:
+    """Combine static photos with the post's original background music into a
+    single MP4 slideshow — this is the closest faithful reproduction of what
+    TikTok's 'Foto Live' (Photo Mode with music) actually looks like when
+    played back, since TikTok photo posts have no per-photo motion clip."""
+    if not photo_files:
+        raise RuntimeError("Tidak ada foto untuk membuat Foto Live.")
+
+    list_file = destination.with_suffix(".txt")
+    with list_file.open("w", encoding="utf-8") as handle:
+        for photo in photo_files:
+            handle.write(f"file '{photo.resolve().as_posix()}'\n")
+            handle.write(f"duration {seconds_per_photo}\n")
+        # ffmpeg concat demuxer requires the last file repeated without a duration
+        handle.write(f"file '{photo_files[-1].resolve().as_posix()}'\n")
+
+    command = [
+        ffmpeg_path,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        str(list_file),
+        "-i",
+        str(audio_path),
+        "-vf",
+        "scale=1080:-2:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,fps=30,format=yuv420p",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "fast",
+        "-crf",
+        "20",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        "-shortest",
+        "-movflags",
+        "+faststart",
+        str(destination),
+    ]
+    try:
+        _run_ffmpeg(command, log_callback)
+    finally:
+        list_file.unlink(missing_ok=True)
+    _ensure_nonempty(destination, "Video Foto Live")
+    return destination
+
+
 def _download_photo_post(
     url: str,
     settings: DownloadSettings,
     progress_hook: Callable[[dict[str, Any]], None] | None = None,
     log_callback: Callable[[str], None] | None = None,
+    include_music_slideshow: bool = False,
 ) -> tuple[dict[str, Any], list[Path]]:
     platform = _platform_name(url)
     if platform == "YouTube":
@@ -845,6 +962,47 @@ def _download_photo_post(
         else:
             output_files.append(archive_path)  # ZIP selalu di akhir, bukan menggantikan JPG/PNG.
 
+    live_slideshow_path: Path | None = None
+    live_slideshow_note: str | None = None
+    if include_music_slideshow and platform == "TikTok":
+        ffmpeg_ok, ffmpeg_path = detect_ffmpeg(settings.ffmpeg_location)
+        if not ffmpeg_ok or not ffmpeg_path:
+            live_slideshow_note = "FFmpeg tidak tersedia; video Foto Live (foto+musik) tidak dibuat."
+        else:
+            audio_path = _download_post_audio(url, output_dir)
+            if not audio_path:
+                live_slideshow_note = (
+                    "Musik latar posting ini tidak dapat diunduh (mungkin dilindungi lisensi atau "
+                    "posting tidak memakai musik), sehingga hanya foto biasa yang tersedia."
+                )
+            else:
+                try:
+                    candidate = output_dir / f"{slug}_FotoLive.mp4"
+                    live_slideshow_path = _build_photo_live_slideshow(
+                        files,
+                        audio_path,
+                        candidate,
+                        ffmpeg_path,
+                        seconds_per_photo=settings.photo_live_seconds_per_photo,
+                        log_callback=log_callback,
+                    )
+                    if settings.max_filesize and live_slideshow_path.stat().st_size > settings.max_filesize:
+                        live_slideshow_path.unlink(missing_ok=True)
+                        live_slideshow_path = None
+                        live_slideshow_note = (
+                            "Video Foto Live melebihi batas ukuran server, hanya foto biasa yang disediakan."
+                        )
+                    else:
+                        output_files.append(live_slideshow_path)
+                except Exception as exc:
+                    live_slideshow_note = f"Gagal membuat video Foto Live: {exc}"
+                finally:
+                    try:
+                        if audio_path.parent.exists() and not any(audio_path.parent.iterdir()):
+                            audio_path.parent.rmdir()
+                    except OSError:
+                        pass
+
     if progress_hook:
         total = sum(path.stat().st_size for path in output_files if path.exists())
         progress_hook({"status": "finished", "downloaded_bytes": total, "total_bytes": total})
@@ -858,6 +1016,8 @@ def _download_photo_post(
         "_photo_count": len(files),
         "_photo_source": f"Posting {platform}",
         "_photo_archive": bool(archive_path and archive_path.exists()),
+        "_photo_live_slideshow": bool(live_slideshow_path),
+        "_photo_live_note": live_slideshow_note,
     }
     return info, output_files
 
@@ -1096,8 +1256,14 @@ def download_media(
 
     if settings.output_kind == "auto_photo_live":
         if detected == "photo":
-            info, files = _download_photo_post(url, settings, progress_hook, log_callback)
-            return _mark_fallback(info, "Terdeteksi sebagai posting foto; foto diunduh satu per satu."), files
+            info, files = _download_photo_post(
+                url, settings, progress_hook, log_callback, include_music_slideshow=True
+            )
+            note = "Terdeteksi sebagai posting foto; foto individual diunduh"
+            note += " beserta video Foto Live (foto+musik)." if info.get("_photo_live_slideshow") else "."
+            if info.get("_photo_live_note"):
+                note += f" Catatan: {info['_photo_live_note']}"
+            return _mark_fallback(info, note), files
         try:
             info, files = _download_live_photo(url, settings, progress_hook, postprocessor_hook, log_callback)
             return _mark_fallback(info, "Terdeteksi sebagai video; dibuat menjadi Foto Live."), files
@@ -1116,11 +1282,19 @@ def download_media(
 
     if settings.output_kind == "live_photo":
         if detected == "photo":
-            info, files = _download_photo_post(url, settings, progress_hook, log_callback)
-            return _mark_fallback(
-                info,
-                "Posting hanya berisi foto statis, sehingga aplikasi mengunduh foto individual dan tidak memaksakan Foto Live palsu.",
-            ), files
+            info, files = _download_photo_post(
+                url, settings, progress_hook, log_callback, include_music_slideshow=True
+            )
+            note = (
+                "Posting berisi foto statis; aplikasi menyediakan foto individual"
+            )
+            if info.get("_photo_live_slideshow"):
+                note += " serta video Foto Live (foto+musik asli posting)."
+            else:
+                note += " tanpa memaksakan Foto Live palsu."
+                if info.get("_photo_live_note"):
+                    note += f" Catatan: {info['_photo_live_note']}"
+            return _mark_fallback(info, note), files
         try:
             return _download_live_photo(url, settings, progress_hook, postprocessor_hook, log_callback)
         except Exception as live_error:
@@ -1145,6 +1319,7 @@ def selected_format_summary(info: dict[str, Any]) -> dict[str, str]:
             "Jumlah foto": str(info.get("_photo_count") or 0),
             "Sumber": str(info.get("_photo_source") or "-"),
             "ZIP tambahan": "Ya" if info.get("_photo_archive") else "Tidak",
+            "Video Foto Live (foto+musik)": "Ya" if info.get("_photo_live_slideshow") else "Tidak",
             "Pemilahan otomatis": fallback,
         }
     if output_kind == "live_photo":

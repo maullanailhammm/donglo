@@ -367,6 +367,7 @@ with main_tab:
     live_photo_format = "bundle"
     live_photo_duration = 3
     live_photo_archive = True
+    photo_live_seconds = 2.5
 
     with left:
         if output_kind_label == "Video":
@@ -425,13 +426,20 @@ with main_tab:
                 resolution_label = "720p"
                 photo_max_dimension = 1280
 
-            live_choice = st.selectbox("Format Foto Live", ["JPG + MOV", "WebP animasi"])
+            live_choice = st.selectbox("Format Foto Live untuk sumber VIDEO", ["JPG + MOV", "WebP animasi"])
             live_photo_format = "bundle" if live_choice == "JPG + MOV" else "webp"
             live_photo_duration = st.selectbox(
-                "Durasi gerak",
+                "Durasi gerak (jika URL berupa video)",
                 [3, 5, 10, 15],
                 index=0,
                 format_func=lambda value: f"{value} detik",
+            )
+            photo_live_seconds = st.slider(
+                "Durasi tiap foto pada video Foto Live (jika URL berupa carousel foto)",
+                min_value=1.0,
+                max_value=6.0,
+                value=2.5,
+                step=0.5,
             )
             photo_archive = st.checkbox("Tambahkan ZIP semua foto jika posting berupa carousel", value=False)
             live_photo_archive = (
@@ -440,9 +448,17 @@ with main_tab:
                 else False
             )
             if auto_mode:
-                st.success("Otomatis: posting foto → file foto individual; posting video → Foto Live.")
+                st.success(
+                    "Otomatis: posting foto → foto individual TETAP diberikan, DAN aplikasi juga mencoba "
+                    "membuat video Foto Live (foto + musik latar asli posting) jika ada musiknya. "
+                    "Posting video → dibuat menjadi Foto Live (JPG + MOV/WebP)."
+                )
             else:
-                st.info("Jika URL ternyata posting foto statis, aplikasi otomatis beralih ke foto individual dan tidak error.")
+                st.info(
+                    "Jika URL ternyata posting foto statis, aplikasi memberikan foto individual DAN mencoba "
+                    "membuat video Foto Live (foto + musik latar asli posting, kualitas terbaik yang tersedia) "
+                    "sekaligus — bukan salah satu saja."
+                )
 
     with right:
         if CLOUD_MODE:
@@ -534,6 +550,7 @@ with main_tab:
                 live_photo_format=live_photo_format,
                 live_photo_duration=live_photo_duration,
                 live_photo_archive=live_photo_archive,
+                photo_live_seconds_per_photo=photo_live_seconds,
             )
 
             if ffmpeg_definitely_required and not ffmpeg_ok:
