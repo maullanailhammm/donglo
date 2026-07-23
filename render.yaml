@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: media-downloader-streamlit
+    runtime: docker
+    plan: free
+    autoDeploy: true
+    healthCheckPath: /_stcore/health
