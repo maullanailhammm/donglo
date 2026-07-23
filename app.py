@@ -34,6 +34,106 @@ from downloader import (
 
 st.set_page_config(page_title="Media Downloader", page_icon="⬇️", layout="wide")
 
+CUSTOM_CSS = """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Sora:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap');
+
+html, body, [class*="css"]  { font-family: 'Inter', sans-serif; }
+
+:root {
+    --md-ink: #1E2130;
+    --md-iris: #6C5CE7;
+    --md-iris-soft: #EFEBFD;
+    --md-teal: #12A594;
+    --md-paper: #FAFAFC;
+    --md-line: #E4E1F2;
+}
+
+.block-container { padding-top: 2rem; max-width: 1180px; }
+
+/* Hero */
+.md-hero { display:flex; align-items:center; gap:14px; margin-bottom: 0.15rem; }
+.md-hero .md-badge {
+    display:flex; align-items:center; justify-content:center;
+    width: 46px; height: 46px; border-radius: 14px;
+    background: linear-gradient(135deg, var(--md-iris), var(--md-teal));
+    font-size: 22px; flex-shrink: 0;
+}
+.md-hero h1 {
+    font-family: 'Sora', sans-serif; font-weight: 800; letter-spacing: -0.02em;
+    font-size: 2.05rem; margin: 0; color: var(--md-ink);
+}
+.md-subtitle { color: #5B5F73; font-size: 0.98rem; margin: 0.15rem 0 1.3rem 62px; }
+
+/* Step headers */
+.md-step { display:flex; align-items:center; gap:10px; margin: 0.4rem 0 0.7rem 0; }
+.md-step .md-step-num {
+    display:flex; align-items:center; justify-content:center;
+    width: 26px; height: 26px; border-radius: 50%;
+    background: var(--md-iris); color: white; font-weight: 700; font-size: 0.82rem;
+    font-family: 'Sora', sans-serif; flex-shrink: 0;
+}
+.md-step .md-step-title {
+    font-family: 'Sora', sans-serif; font-weight: 700; font-size: 1.12rem; color: var(--md-ink);
+}
+.md-step .md-step-hint { color: #7A7E91; font-size: 0.86rem; margin-left: 36px; }
+
+/* Chips used for media-type labelling in the guide */
+.md-chip {
+    display:inline-flex; align-items:center; gap:6px;
+    background: var(--md-iris-soft); color: var(--md-iris);
+    border-radius: 999px; padding: 4px 12px; font-size: 0.83rem; font-weight: 600;
+    margin: 2px 6px 2px 0;
+}
+
+/* Bordered containers -> soft cards */
+div[data-testid="stVerticalBlockBorderWrapper"] {
+    border-radius: 16px !important;
+    border: 1px solid var(--md-line) !important;
+    background: white;
+}
+
+/* Buttons */
+.stButton > button, .stDownloadButton > button {
+    border-radius: 10px !important;
+    font-weight: 600 !important;
+}
+.stButton > button[kind="primary"] {
+    background: linear-gradient(135deg, var(--md-iris), #8B6CF0) !important;
+    border: none !important;
+}
+
+/* Radio pills */
+div[role="radiogroup"] { gap: 6px; }
+div[role="radiogroup"] label {
+    background: var(--md-iris-soft); border-radius: 999px; padding: 6px 14px !important;
+    margin-right: 4px;
+}
+
+/* Tabs */
+.stTabs [data-baseweb="tab"] { font-weight: 600; font-family: 'Sora', sans-serif; }
+
+hr { border-color: var(--md-line) !important; }
+</style>
+"""
+st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+
+
+def step_header(number: int, title: str, hint: str = "") -> None:
+    hint_html = f'<div class="md-step-hint">{hint}</div>' if hint else ""
+    st.markdown(
+        f"""
+        <div class="md-step">
+            <div class="md-step-num">{number}</div>
+            <div class="md-step-title">{title}</div>
+        </div>
+        {hint_html}
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+
 CLOUD_MODE = os.getenv("MEDIA_DOWNLOADER_CLOUD", "").lower() in {"1", "true", "yes"} or os.name != "nt"
 CLOUD_URL_LIMIT = 3
 LOCAL_URL_LIMIT = 20
@@ -293,10 +393,18 @@ def render_browser_downloads(results: list[dict[str, Any]]) -> None:
 
 cleanup_old_sessions()
 
-st.title("⬇️ Media Downloader")
-st.caption("Video, audio, foto/carousel, serta Foto Live dari media publik yang Anda miliki atau diizinkan untuk disimpan.")
+st.markdown(
+    """
+    <div class="md-hero">
+        <div class="md-badge">⬇️</div>
+        <h1>Media Downloader</h1>
+    </div>
+    <p class="md-subtitle">Simpan video, audio, foto/carousel, dan Foto Live dari media publik yang Anda miliki atau diizinkan untuk diunduh.</p>
+    """,
+    unsafe_allow_html=True,
+)
 
-with st.expander("Batas penggunaan", expanded=False):
+with st.expander("📜 Batas penggunaan", expanded=False):
     st.markdown(
         """
         Aplikasi tidak membobol DRM, paywall, akun privat, atau pembatasan akses. Kualitas hasil bergantung pada
@@ -319,24 +427,38 @@ main_tab, guide_tab = st.tabs(["Unduh", "Panduan"])
 
 with main_tab:
     url_limit = CLOUD_URL_LIMIT if CLOUD_MODE else LOCAL_URL_LIMIT
-    url_text = st.text_area(
-        "URL media",
-        height=120,
-        placeholder=f"Tempel satu URL per baris. Maksimal {url_limit} URL.",
-        help="Mendukung URL publik YouTube, TikTok, dan Instagram.",
-    )
+    with st.container(border=True):
+        step_header(1, "Tempel URL", f"Satu URL per baris · maksimal {url_limit} URL")
+        url_text = st.text_area(
+            "URL media",
+            height=120,
+            placeholder=f"Tempel satu URL per baris. Maksimal {url_limit} URL.",
+            help="Mendukung URL publik YouTube, TikTok, dan Instagram.",
+            label_visibility="collapsed",
+        )
 
-    output_kind_label = st.radio(
-        "Jenis hasil",
-        ["Video", "Audio", "Foto / Foto Live (Otomatis)", "Foto", "Foto Live"],
-        horizontal=True,
-    )
+    st.write("")
+    with st.container(border=True):
+        step_header(2, "Pilih jenis hasil")
+        output_kind_label = st.radio(
+            "Jenis hasil",
+            ["Video", "Audio", "Foto / Foto Live (Otomatis)", "Foto", "Foto Live"],
+            horizontal=True,
+            label_visibility="collapsed",
+            format_func=lambda value: {
+                "Video": "🎬 Video",
+                "Audio": "🎵 Audio",
+                "Foto / Foto Live (Otomatis)": "✨ Otomatis (Foto/Foto Live)",
+                "Foto": "🖼️ Foto",
+                "Foto Live": "🎞️ Foto Live",
+            }.get(value, value),
+        )
 
-    preview_col, hint_col = st.columns([1, 5])
-    with preview_col:
-        preview_clicked = st.button("🔎 Pratinjau", use_container_width=True)
-    with hint_col:
-        st.caption("Pratinjau mendeteksi otomatis apakah URL berisi foto/carousel atau video.")
+        preview_col, hint_col = st.columns([1, 5])
+        with preview_col:
+            preview_clicked = st.button("🔎 Pratinjau", use_container_width=True)
+        with hint_col:
+            st.caption("Pratinjau mendeteksi otomatis apakah URL berisi foto/carousel atau video.")
 
     if preview_clicked:
         try:
@@ -352,154 +474,164 @@ with main_tab:
             st.error(f"Pratinjau gagal: {exc}")
 
     if st.session_state.preview and st.session_state.preview_url.strip() in url_text:
-        render_preview(st.session_state.preview, output_kind_label)
+        st.write("")
+        with st.container(border=True):
+            render_preview(st.session_state.preview, output_kind_label)
 
-    st.divider()
-    left, right = st.columns(2)
+    st.write("")
+    st.write("")
+    with st.container(border=True):
+        step_header(3, "Atur kualitas dan tujuan penyimpanan")
+        left, right = st.columns(2)
 
-    container = "mkv"
-    resolution_label = "Terbaik tersedia"
-    quality_mode = "original"
-    audio_format = "original"
-    bitrate = "320"
-    photo_archive = False
-    photo_max_dimension = 1920
-    live_photo_format = "bundle"
-    live_photo_duration = 3
-    live_photo_archive = True
-    photo_live_seconds = 2.5
+        container = "mkv"
+        resolution_label = "Terbaik tersedia"
+        quality_mode = "original"
+        audio_format = "original"
+        bitrate = "320"
+        photo_archive = False
+        photo_max_dimension = 1920
+        live_photo_format = "bundle"
+        live_photo_duration = 3
+        live_photo_archive = True
+        photo_live_seconds = 2.5
 
-    with left:
-        if output_kind_label == "Video":
-            quality_choice = st.selectbox(
-                "Mode kualitas video",
-                ["Versi asli / terbaik tersedia", "HD 1080p", "HD 720p", "Pilih resolusi manual"],
-            )
-            container = st.selectbox("Kontainer", ["mkv", "mp4"], format_func=str.upper)
-            if quality_choice == "HD 1080p":
-                resolution_label = "1080p"
-                quality_mode = "hd"
-            elif quality_choice == "HD 720p":
-                resolution_label = "720p"
-                quality_mode = "hd"
-            elif quality_choice == "Pilih resolusi manual":
-                resolution_label = st.selectbox(
-                    "Resolusi maksimum",
-                    ["2160p", "1440p", "1080p", "720p", "480p", "360p"],
-                    index=2,
+        with left:
+            if output_kind_label == "Video":
+                quality_choice = st.selectbox(
+                    "Mode kualitas video",
+                    ["Versi asli / terbaik tersedia", "HD 1080p", "HD 720p", "Pilih resolusi manual"],
                 )
-                quality_mode = "hd"
-            st.caption("MKV paling aman untuk mempertahankan kombinasi codec sumber terbaik.")
+                container = st.selectbox("Kontainer", ["mkv", "mp4"], format_func=str.upper)
+                if quality_choice == "HD 1080p":
+                    resolution_label = "1080p"
+                    quality_mode = "hd"
+                elif quality_choice == "HD 720p":
+                    resolution_label = "720p"
+                    quality_mode = "hd"
+                elif quality_choice == "Pilih resolusi manual":
+                    resolution_label = st.selectbox(
+                        "Resolusi maksimum",
+                        ["2160p", "1440p", "1080p", "720p", "480p", "360p"],
+                        index=2,
+                    )
+                    quality_mode = "hd"
+                st.caption("MKV paling aman untuk mempertahankan kombinasi codec sumber terbaik.")
 
-        elif output_kind_label == "Audio":
-            audio_choice = st.selectbox("Format audio", ["Audio asli", "MP3"])
-            audio_format = "original" if audio_choice == "Audio asli" else "mp3"
-            if audio_format == "mp3":
-                bitrate = st.selectbox("Bitrate MP3", ["320", "256", "192", "128"], index=0)
+            elif output_kind_label == "Audio":
+                audio_choice = st.selectbox("Format audio", ["Audio asli", "MP3"])
+                audio_format = "original" if audio_choice == "Audio asli" else "mp3"
+                if audio_format == "mp3":
+                    bitrate = st.selectbox("Bitrate MP3", ["320", "256", "192", "128"], index=0)
 
-        elif output_kind_label == "Foto":
-            photo_quality = st.selectbox(
-                "Mode kualitas foto",
-                ["Versi asli / resolusi tertinggi platform", "HD maksimal 1920 piksel", "HD ringan maksimal 1280 piksel"],
-            )
-            if photo_quality.startswith("HD maksimal"):
-                quality_mode = "hd"
-                photo_max_dimension = 1920
-            elif photo_quality.startswith("HD ringan"):
-                quality_mode = "hd"
-                photo_max_dimension = 1280
-            photo_archive = st.checkbox("Tambahkan ZIP semua foto", value=False)
-            st.success("Setiap foto tetap diberikan sebagai JPG/PNG/WebP individual. ZIP tidak menggantikan foto individual.")
-
-        else:
-            auto_mode = output_kind_label == "Foto / Foto Live (Otomatis)"
-            source_quality = st.selectbox(
-                "Kualitas sumber",
-                ["Versi asli / terbaik tersedia", "HD 1080p / foto 1920px", "HD 720p / foto 1280px"],
-            )
-            if source_quality.startswith("HD 1080"):
-                quality_mode = "hd"
-                resolution_label = "1080p"
-                photo_max_dimension = 1920
-            elif source_quality.startswith("HD 720"):
-                quality_mode = "hd"
-                resolution_label = "720p"
-                photo_max_dimension = 1280
-
-            live_choice = st.selectbox("Format Foto Live untuk sumber VIDEO", ["JPG + MOV", "WebP animasi"])
-            live_photo_format = "bundle" if live_choice == "JPG + MOV" else "webp"
-            photo_live_seconds = st.slider(
-                "Durasi tiap foto pada video Foto Live (jika URL berupa carousel foto)",
-                min_value=1.0,
-                max_value=6.0,
-                value=2.5,
-                step=0.5,
-            )
-            photo_archive = st.checkbox("Tambahkan ZIP semua foto jika posting berupa carousel", value=False)
-            live_photo_archive = (
-                st.checkbox("Tambahkan ZIP pasangan JPG + MOV", value=True)
-                if live_photo_format == "bundle"
-                else False
-            )
-            if auto_mode:
-                st.success(
-                    "Otomatis: posting foto → foto individual TETAP diberikan, DAN aplikasi juga mencoba "
-                    "membuat video Foto Live (foto + musik latar asli posting) jika ada musiknya. "
-                    "Posting video → dibuat menjadi Foto Live (JPG + MOV/WebP)."
+            elif output_kind_label == "Foto":
+                photo_quality = st.selectbox(
+                    "Mode kualitas foto",
+                    ["Versi asli / resolusi tertinggi platform", "HD maksimal 1920 piksel", "HD ringan maksimal 1280 piksel"],
                 )
+                if photo_quality.startswith("HD maksimal"):
+                    quality_mode = "hd"
+                    photo_max_dimension = 1920
+                elif photo_quality.startswith("HD ringan"):
+                    quality_mode = "hd"
+                    photo_max_dimension = 1280
+                photo_archive = st.checkbox("Tambahkan ZIP semua foto", value=False)
+                st.success("Setiap foto tetap diberikan sebagai JPG/PNG/WebP individual. ZIP tidak menggantikan foto individual.")
+
             else:
-                st.info(
-                    "Jika URL ternyata posting foto statis, aplikasi memberikan foto individual DAN mencoba "
-                    "membuat video Foto Live (foto + musik latar asli posting, kualitas terbaik yang tersedia) "
-                    "sekaligus — bukan salah satu saja."
+                auto_mode = output_kind_label == "Foto / Foto Live (Otomatis)"
+                source_quality = st.selectbox(
+                    "Kualitas sumber",
+                    ["Versi asli / terbaik tersedia", "HD 1080p / foto 1920px", "HD 720p / foto 1280px"],
+                )
+                if source_quality.startswith("HD 1080"):
+                    quality_mode = "hd"
+                    resolution_label = "1080p"
+                    photo_max_dimension = 1920
+                elif source_quality.startswith("HD 720"):
+                    quality_mode = "hd"
+                    resolution_label = "720p"
+                    photo_max_dimension = 1280
+
+                live_choice = st.selectbox("Format Foto Live untuk sumber VIDEO", ["JPG + MOV", "WebP animasi"])
+                live_photo_format = "bundle" if live_choice == "JPG + MOV" else "webp"
+                photo_live_seconds = st.slider(
+                    "Durasi tiap foto pada video Foto Live (jika URL berupa carousel foto)",
+                    min_value=1.0,
+                    max_value=6.0,
+                    value=2.5,
+                    step=0.5,
+                )
+                photo_archive = st.checkbox("Tambahkan ZIP semua foto jika posting berupa carousel", value=False)
+                live_photo_archive = (
+                    st.checkbox("Tambahkan ZIP pasangan JPG + MOV", value=True)
+                    if live_photo_format == "bundle"
+                    else False
+                )
+                if auto_mode:
+                    st.success(
+                        "Otomatis: posting foto → foto individual TETAP diberikan, DAN aplikasi juga mencoba "
+                        "membuat video Foto Live (foto + musik latar asli posting) jika ada musiknya. "
+                        "Posting video → dibuat menjadi Foto Live (JPG + MOV/WebP)."
+                    )
+                else:
+                    st.info(
+                        "Jika URL ternyata posting foto statis, aplikasi memberikan foto individual DAN mencoba "
+                        "membuat video Foto Live (foto + musik latar asli posting, kualitas terbaik yang tersedia) "
+                        "sekaligus — bukan salah satu saja."
+                    )
+
+        with right:
+            if CLOUD_MODE:
+                output_dir = get_session_download_dir()
+                st.text_input("Penyimpanan server", value="Sementara — otomatis dihapus", disabled=True)
+                ffmpeg_location_text = ""
+            else:
+                output_dir_text = st.text_input("Folder penyimpanan", value=str(default_download_directory()))
+                output_dir = Path(output_dir_text).expanduser() if output_dir_text.strip() else Path()
+                ffmpeg_location_text = st.text_input(
+                    "Lokasi FFmpeg (opsional)",
+                    value="",
+                    placeholder=r"Contoh: C:\ffmpeg\bin atau C:\ffmpeg\bin\ffmpeg.exe",
                 )
 
-    with right:
-        if CLOUD_MODE:
-            output_dir = get_session_download_dir()
-            st.text_input("Penyimpanan server", value="Sementara — otomatis dihapus", disabled=True)
-            ffmpeg_location_text = ""
-        else:
-            output_dir_text = st.text_input("Folder penyimpanan", value=str(default_download_directory()))
-            output_dir = Path(output_dir_text).expanduser() if output_dir_text.strip() else Path()
-            ffmpeg_location_text = st.text_input(
-                "Lokasi FFmpeg (opsional)",
-                value="",
-                placeholder=r"Contoh: C:\ffmpeg\bin atau C:\ffmpeg\bin\ffmpeg.exe",
+            ffmpeg_ok, detected_path = detect_ffmpeg(ffmpeg_location_text or None)
+            gallery_ok, gallery_version = detect_gallery_dl()
+
+            ffmpeg_definitely_required = (
+                output_kind_label in {"Video", "Foto Live"}
+                or (output_kind_label == "Audio" and audio_format == "mp3")
             )
+            ffmpeg_maybe_required = output_kind_label == "Foto / Foto Live (Otomatis)"
 
-        ffmpeg_ok, detected_path = detect_ffmpeg(ffmpeg_location_text or None)
-        gallery_ok, gallery_version = detect_gallery_dl()
+            if ffmpeg_ok:
+                source_label = "portable" if detected_path and "media_downloader_ffmpeg" in detected_path else "sistem"
+                st.success(f"FFmpeg terdeteksi ({source_label}): {detected_path}")
+            elif ffmpeg_definitely_required:
+                st.warning("FFmpeg belum terdeteksi. Mode yang dipilih dapat gagal.")
+            elif ffmpeg_maybe_required:
+                st.warning("FFmpeg belum terdeteksi. Posting foto masih bisa, tetapi pembuatan Foto Live tidak bisa.")
+            else:
+                st.info("FFmpeg tidak wajib untuk pilihan saat ini.")
 
-        ffmpeg_definitely_required = (
-            output_kind_label in {"Video", "Foto Live"}
-            or (output_kind_label == "Audio" and audio_format == "mp3")
+            if gallery_ok:
+                st.success(f"gallery-dl terdeteksi: {gallery_version}")
+            elif output_kind_label in {"Foto", "Foto Live", "Foto / Foto Live (Otomatis)"}:
+                st.warning("gallery-dl belum terdeteksi. Posting foto TikTok/Instagram tidak dapat diproses.")
+
+            consent = st.checkbox("Saya memiliki hak atau izin untuk mengunduh media tersebut.", value=False)
+
+    st.write("")
+    with st.container(border=True):
+        step_header(4, "Mulai unduhan")
+        download_clicked = st.button(
+            "⬇️ Mulai Download",
+            type="primary",
+            use_container_width=True,
+            disabled=not consent,
         )
-        ffmpeg_maybe_required = output_kind_label == "Foto / Foto Live (Otomatis)"
-
-        if ffmpeg_ok:
-            source_label = "portable" if detected_path and "media_downloader_ffmpeg" in detected_path else "sistem"
-            st.success(f"FFmpeg terdeteksi ({source_label}): {detected_path}")
-        elif ffmpeg_definitely_required:
-            st.warning("FFmpeg belum terdeteksi. Mode yang dipilih dapat gagal.")
-        elif ffmpeg_maybe_required:
-            st.warning("FFmpeg belum terdeteksi. Posting foto masih bisa, tetapi pembuatan Foto Live tidak bisa.")
-        else:
-            st.info("FFmpeg tidak wajib untuk pilihan saat ini.")
-
-        if gallery_ok:
-            st.success(f"gallery-dl terdeteksi: {gallery_version}")
-        elif output_kind_label in {"Foto", "Foto Live", "Foto / Foto Live (Otomatis)"}:
-            st.warning("gallery-dl belum terdeteksi. Posting foto TikTok/Instagram tidak dapat diproses.")
-
-        consent = st.checkbox("Saya memiliki hak atau izin untuk mengunduh media tersebut.", value=False)
-
-    download_clicked = st.button(
-        "⬇️ Mulai Download",
-        type="primary",
-        use_container_width=True,
-        disabled=not consent,
-    )
+        if not consent:
+            st.caption("Centang kotak persetujuan pada Langkah 3 untuk mengaktifkan tombol ini.")
 
     if download_clicked:
         try:
@@ -625,6 +757,18 @@ with main_tab:
                         st.code(file_info["path"], language=None)
 
 with guide_tab:
+    st.markdown(
+        """
+        <span class="md-chip">🎬 Video</span>
+        <span class="md-chip">🎵 Audio</span>
+        <span class="md-chip">🖼️ Foto</span>
+        <span class="md-chip">🎞️ Foto Live</span>
+        <span class="md-chip">✨ Otomatis</span>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.write("")
+
     st.subheader("Perubahan versi final")
     st.markdown(
         """
@@ -635,17 +779,18 @@ with guide_tab:
         - Mode **Foto / Foto Live (Otomatis)** membedakan posting foto dan video secara otomatis.
         - Jika mode Foto Live diberi URL posting foto statis, aplikasi otomatis mengunduh foto individual agar tidak error.
         - Hasil Foto Live **JPG dan MOV** memiliki tombol download masing-masing; ZIP pasangan bersifat opsional.
+        - Carousel TikTok campuran (foto biasa + Foto Live) kini dideteksi per item secara otomatis.
         """
     )
 
     st.subheader("Cara menggunakan")
     st.markdown(
         """
-        1. Tempel URL publik YouTube, TikTok, atau Instagram.
-        2. Untuk foto dan Foto Live, pilih **Foto / Foto Live (Otomatis)**.
-        3. Klik **Pratinjau** untuk memastikan hasil deteksi.
+        1. **Tempel URL** publik YouTube, TikTok, atau Instagram.
+        2. Untuk foto dan Foto Live, pilih **✨ Otomatis (Foto/Foto Live)**.
+        3. Klik **🔎 Pratinjau** untuk memastikan hasil deteksi.
         4. Pilih kualitas dan format hasil.
-        5. Klik **Mulai Download**.
+        5. Klik **⬇️ Mulai Download**.
         6. Gunakan tombol di bawah setiap foto, JPG, MOV, video, atau audio untuk download satu per satu.
         """
     )
