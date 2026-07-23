@@ -58,6 +58,7 @@ class DownloadSettings:
     output_kind: str  # video, audio, photo, live_photo
     container: str = "mp4"
     resolution: int | None = None
+    quality_mode: str = "original"
     audio_format: str = "mp3"  # mp3 or original
     audio_bitrate: str = "320"
     output_dir: Path = Path("downloads")
@@ -525,10 +526,14 @@ def _download_youtube_thumbnail(
         output.unlink(missing_ok=True)
         raise RuntimeError("Ukuran thumbnail melebihi batas server.")
 
+    outputs = [output]
+    if settings.quality_mode == "hd":
+        outputs = _resize_photos_hd(outputs, 1920)
     info["_output_kind"] = "photo"
     info["_photo_count"] = 1
     info["_photo_source"] = "Thumbnail YouTube"
-    return info, [output]
+    info["_quality_mode"] = settings.quality_mode
+    return info, outputs
 
 
 def _run_gallery_dl(
@@ -587,6 +592,35 @@ def _run_gallery_dl(
         )
 
 
+def _resize_photos_hd(files: list[Path], max_dimension: int = 1920) -> list[Path]:
+    """Create HD copies capped at max_dimension while preserving originals when already smaller."""
+    try:
+        from PIL import Image, ImageOps
+    except ImportError as exc:
+        raise RuntimeError("Pillow belum terpasang untuk mode Foto HD.") from exc
+
+    outputs: list[Path] = []
+    for path in files:
+        try:
+            with Image.open(path) as image:
+                image = ImageOps.exif_transpose(image)
+                width, height = image.size
+                if max(width, height) <= max_dimension:
+                    outputs.append(path)
+                    continue
+                scale = max_dimension / max(width, height)
+                target = (max(1, round(width * scale)), max(1, round(height * scale)))
+                resized = image.resize(target, Image.Resampling.LANCZOS)
+                out = path.with_name(f"{path.stem}_HD.jpg")
+                if resized.mode not in ("RGB", "L"):
+                    resized = resized.convert("RGB")
+                resized.save(out, "JPEG", quality=92, optimize=True)
+                outputs.append(out)
+        except Exception:
+            outputs.append(path)
+    return outputs
+
+
 def _archive_files(files: list[Path], destination: Path) -> Path:
     with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
         for path in sorted(files, key=lambda item: item.name.lower()):
@@ -619,6 +653,9 @@ def _download_photo_post(
         raise RuntimeError(
             "Tidak ada foto yang ditemukan. Gunakan URL posting/carousel publik TikTok atau Instagram."
         )
+
+    if settings.quality_mode == "hd":
+        files = _resize_photos_hd(files, 1920)
 
     slug = _safe_filename(Path(urlparse(url).path.rstrip("/")).name or f"foto_{int(time.time())}")
     output_files = list(files)
@@ -680,6 +717,7 @@ def _download_live_photo(
             output_kind="video",
             container="mkv",
             resolution=settings.resolution,
+            quality_mode=settings.quality_mode,
             output_dir=temp_dir,
             ffmpeg_location=ffmpeg_path,
             max_filesize=settings.max_filesize,

@@ -234,6 +234,7 @@ with main_tab:
 
         container = "mp4"
         resolution_label = "Terbaik tersedia"
+        quality_mode = "original"
         audio_format = "original"
         bitrate = "320"
         photo_archive = True
@@ -241,13 +242,28 @@ with main_tab:
         live_photo_duration = 3
 
         if output_kind_label == "Video":
-            container = st.selectbox("Kontainer", ["mp4", "mkv"], format_func=str.upper)
-            resolution_options = ["Terbaik tersedia", "2160p", "1440p", "1080p", "720p", "480p", "360p"]
-            resolution_label = st.selectbox("Batas resolusi", resolution_options, index=0)
-            if container == "mkv":
-                st.caption("MKV direkomendasikan untuk mempertahankan kombinasi codec terbaik tanpa re-encode.")
+            quality_choice = st.selectbox(
+                "Mode kualitas",
+                ["Versi asli / terbaik tersedia", "HD 1080p", "HD 720p", "Pilih resolusi manual"],
+            )
+            quality_mode = "original" if quality_choice.startswith("Versi asli") else "hd"
+            container = st.selectbox("Kontainer", ["mkv", "mp4"], format_func=str.upper)
+            if quality_choice == "Versi asli / terbaik tersedia":
+                resolution_label = "Terbaik tersedia"
+                st.info("Mengambil kualitas tertinggi yang disediakan platform tanpa sengaja menurunkan resolusi.")
+            elif quality_choice == "HD 1080p":
+                resolution_label = "1080p"
+                st.info("Membatasi hasil maksimal Full HD 1080p agar ukuran lebih ringan dan kompatibel.")
+            elif quality_choice == "HD 720p":
+                resolution_label = "720p"
+                st.info("Membatasi hasil maksimal HD 720p.")
             else:
-                st.caption("MP4 memilih stream terbaik; kompatibilitas bergantung pada codec sumber.")
+                resolution_options = ["2160p", "1440p", "1080p", "720p", "480p", "360p"]
+                resolution_label = st.selectbox("Resolusi maksimum", resolution_options, index=2)
+            if container == "mkv":
+                st.caption("MKV paling aman untuk mempertahankan codec dan kualitas sumber terbaik.")
+            else:
+                st.caption("MP4 lebih kompatibel, tetapi codec sumber tertentu mungkin tidak didukung semua pemutar.")
 
         elif output_kind_label == "Audio":
             audio_choice = st.selectbox("Format audio", ["MP3", "Audio asli (M4A/Opus/WebM sesuai sumber)"])
@@ -259,21 +275,35 @@ with main_tab:
             )
 
         elif output_kind_label == "Foto":
-            photo_archive = st.checkbox("Buat ZIP yang berisi semua foto", value=True)
-            st.caption(
-                "TikTok/Instagram: mengunduh semua foto pada posting atau carousel. "
-                "YouTube: mengunduh thumbnail beresolusi tertinggi."
+            photo_quality = st.selectbox(
+                "Mode kualitas foto",
+                ["Versi asli / resolusi tertinggi platform", "HD maksimal 1920 piksel"],
             )
+            quality_mode = "original" if photo_quality.startswith("Versi asli") else "hd"
+            photo_archive = st.checkbox("Buat ZIP yang berisi semua foto", value=True)
+            if quality_mode == "original":
+                st.info("Foto disimpan pada resolusi tertinggi yang diberikan TikTok, Instagram, atau YouTube tanpa resize oleh aplikasi.")
+            else:
+                st.info("Foto diperkecil maksimal 1920 piksel pada sisi terpanjang untuk versi HD yang lebih ringan.")
 
         else:
+            live_quality = st.selectbox(
+                "Mode kualitas sumber",
+                ["Versi asli / terbaik tersedia", "HD 1080p", "HD 720p"],
+            )
+            quality_mode = "original" if live_quality.startswith("Versi asli") else "hd"
             live_choice = st.selectbox(
                 "Format Foto Live",
                 ["Paket ZIP (JPG + MOV)", "WebP animasi"],
             )
             live_photo_format = "bundle" if live_choice.startswith("Paket") else "webp"
             live_photo_duration = st.selectbox("Durasi gerak", [3, 5, 10, 15], index=0, format_func=lambda value: f"{value} detik")
-            resolution_options = ["Terbaik tersedia", "2160p", "1440p", "1080p", "720p"]
-            resolution_label = st.selectbox("Batas resolusi sumber", resolution_options, index=0)
+            if live_quality == "Versi asli / terbaik tersedia":
+                resolution_label = "Terbaik tersedia"
+            elif live_quality == "HD 1080p":
+                resolution_label = "1080p"
+            else:
+                resolution_label = "720p"
             st.caption(
                 "Foto Live dibuat dari URL video/Reel/TikTok video. Paket ZIP berisi gambar JPG dan klip MOV; "
                 "WebP dapat bergerak langsung di aplikasi yang mendukungnya."
@@ -366,6 +396,7 @@ with main_tab:
                 output_kind=output_kind_map[output_kind_label],
                 container=container,
                 resolution=resolution,
+                quality_mode=quality_mode,
                 audio_format=audio_format,
                 audio_bitrate=bitrate,
                 output_dir=output_dir,
@@ -482,7 +513,8 @@ with guide_tab:
     st.subheader("Catatan kualitas dan server")
     st.markdown(
         """
-        - “Terbaik tersedia” memilih stream terbaik yang platform sediakan, bukan file master kamera.
+        - **Versi asli / terbaik tersedia** mengambil kualitas tertinggi yang masih disediakan platform; ini bukan file master kamera sebelum diunggah.
+        - **HD 1080p/720p** sengaja membatasi resolusi agar ukuran lebih ringan dan kompatibel.
         - Foto TikTok/Instagram diambil oleh **gallery-dl** pada versi resolusi tertinggi yang endpoint platform sediakan.
         - Paket **Foto Live JPG+MOV** adalah pasangan gambar dan klip gerak portabel. Sebagian perangkat iPhone mungkin memerlukan aplikasi impor Live Photo agar dikenali sebagai satu item Live Photo native.
         - Foto Live dibuat ulang dari video sehingga prosesnya melibatkan encoding; video biasa tetap dipertahankan tanpa sengaja melakukan re-encode ketika memungkinkan.

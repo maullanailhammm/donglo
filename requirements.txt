@@ -2,3 +2,5 @@ streamlit>=1.48,<2
 yt-dlp[default,curl-cffi]
 gallery-dl>=1.31,<2
 imageio-ffmpeg>=0.6,<1
+
+Pillow>=10,<12
