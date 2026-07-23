@@ -236,7 +236,16 @@ def estimate_format_sizes(formats: Iterable[dict[str, Any]]) -> tuple[list[dict[
 
 
 def _gallery_common_args() -> list[str]:
-    image_filter = "extension and extension.lower() in ('jpg','jpeg','png','webp','avif','heic','heif','gif')"
+    # Ambil foto DAN video/foto-live dalam satu proses. Sebelumnya video pada
+    # carousel campuran (mis. Instagram carousel berisi foto + Reels/Foto
+    # Live) sengaja dibuang oleh filter ini sehingga hanya .jpg yang pernah
+    # muncul. Sekarang setiap item carousel diambil apa adanya: item foto
+    # tetap .jpg/.png/.webp, item video/Foto Live otomatis menjadi .mp4/.mov.
+    media_filter = (
+        "extension and extension.lower() in ("
+        "'jpg','jpeg','png','webp','avif','heic','heif','gif',"
+        "'mp4','mov','webm','mkv')"
+    )
     return [
         sys.executable,
         "-m",
@@ -246,7 +255,7 @@ def _gallery_common_args() -> list[str]:
         "--no-colors",
         "--windows-filenames",
         "--filter",
-        image_filter,
+        media_filter,
         "-o",
         "output.fallback=false",
         "-o",
@@ -256,7 +265,7 @@ def _gallery_common_args() -> list[str]:
         "-o",
         "extractor.tiktok.covers=false",
         "-o",
-        "extractor.instagram.videos=false",
+        "extractor.instagram.videos=true",
     ]
 
 
@@ -925,17 +934,15 @@ def _download_photo_post(
     except Exception as exc:
         gallery_error = exc
 
-    files = [
-        path
-        for path in _collect_output_files(output_dir, started_at)
-        if path.suffix.lower() in IMAGE_EXTENSIONS
-    ]
+    extracted = _collect_output_files(output_dir, started_at)
+    files = [path for path in extracted if path.suffix.lower() in IMAGE_EXTENSIONS]
+    live_video_files = [path for path in extracted if path.suffix.lower() in VIDEO_EXTENSIONS]
     fallback_error: str | None = None
-    if not files:
+    if not files and not live_video_files:
         image_urls, fallback_error = _gallery_image_urls(url)
         if image_urls:
             files = _download_direct_images(image_urls, output_dir, url, settings.max_filesize, log_callback)
-    if not files:
+    if not files and not live_video_files:
         detail_parts = []
         if gallery_error:
             detail_parts.append(f"gallery-dl (download): {gallery_error}")
@@ -943,16 +950,24 @@ def _download_photo_post(
             detail_parts.append(f"gallery-dl (get-urls): {fallback_error}")
         detail = f" Detail: {' | '.join(detail_parts)}" if detail_parts else ""
         raise RuntimeError(
-            "Tidak ada foto yang ditemukan pada posting publik ini. Kemungkinan link privat/dihapus, "
-            f"atau TikTok/Instagram mengubah struktur halamannya sehingga gallery-dl gagal mengekstrak.{detail}"
+            "Tidak ada foto atau Foto Live yang ditemukan pada posting publik ini. Kemungkinan link "
+            f"privat/dihapus, atau TikTok/Instagram mengubah struktur halamannya sehingga gallery-dl gagal mengekstrak.{detail}"
         )
 
     files = sorted(set(files), key=lambda path: path.name.lower())
+    live_video_files = sorted(set(live_video_files), key=lambda path: path.name.lower())
     if settings.quality_mode == "hd":
         files = _resize_photos_hd(files, settings.photo_max_dimension)
 
+    for video_path in live_video_files:
+        if settings.max_filesize and video_path.stat().st_size > settings.max_filesize:
+            video_path.unlink(missing_ok=True)
+    live_video_files = [path for path in live_video_files if path.exists()]
+
     slug = _safe_filename(Path(urlparse(url).path.rstrip("/")).name or f"foto_{int(time.time())}")
-    output_files = list(files)  # Foto individual selalu dipertahankan.
+    # Foto individual DAN Foto Live/video asli carousel selalu dipertahankan
+    # apa adanya (tidak ada yang dipaksa jadi satu jenis saja).
+    output_files = list(files) + list(live_video_files)
     archive_path: Path | None = None
     if settings.photo_archive and len(files) > 1:
         archive_path = output_dir / f"Semua_Foto_{slug}.zip"
@@ -1007,9 +1022,17 @@ def _download_photo_post(
         total = sum(path.stat().st_size for path in output_files if path.exists())
         progress_hook({"status": "finished", "downloaded_bytes": total, "total_bytes": total})
 
+    total_item_count = len(files) + len(live_video_files)
+    title_parts = []
+    if files:
+        title_parts.append(f"{len(files)} foto")
+    if live_video_files:
+        title_parts.append(f"{len(live_video_files)} Foto Live/video")
+    title_detail = " + ".join(title_parts) if title_parts else "0 file"
+
     info: dict[str, Any] = {
         "id": slug,
-        "title": f"Foto {platform} ({len(files)} file)",
+        "title": f"Foto {platform} ({title_detail})",
         "extractor": platform,
         "webpage_url": url,
         "_output_kind": "photo",
@@ -1018,6 +1041,8 @@ def _download_photo_post(
         "_photo_archive": bool(archive_path and archive_path.exists()),
         "_photo_live_slideshow": bool(live_slideshow_path),
         "_photo_live_note": live_slideshow_note,
+        "_carousel_live_video_count": len(live_video_files),
+        "_carousel_total_count": total_item_count,
     }
     return info, output_files
 
@@ -1314,14 +1339,18 @@ def selected_format_summary(info: dict[str, Any]) -> dict[str, str]:
     output_kind = info.get("_output_kind")
     fallback = str(info.get("_fallback_reason") or "-")
     if output_kind == "photo":
-        return {
-            "Jenis": "Foto",
-            "Jumlah foto": str(info.get("_photo_count") or 0),
+        result = {
+            "Jenis": "Foto / Carousel",
+            "Jumlah foto (.jpg/.png/.webp)": str(info.get("_photo_count") or 0),
             "Sumber": str(info.get("_photo_source") or "-"),
             "ZIP tambahan": "Ya" if info.get("_photo_archive") else "Tidak",
             "Video Foto Live (foto+musik)": "Ya" if info.get("_photo_live_slideshow") else "Tidak",
             "Pemilahan otomatis": fallback,
         }
+        live_count = int(info.get("_carousel_live_video_count") or 0)
+        if live_count:
+            result["Foto Live asli carousel (.mp4/.mov)"] = str(live_count)
+        return result
     if output_kind == "live_photo":
         format_label = "JPG + MOV" if info.get("_live_photo_format") == "bundle" else "WebP animasi"
         return {

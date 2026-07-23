@@ -56,7 +56,7 @@ def test_summary_photo_contains_auto_note():
             "_fallback_reason": "Terdeteksi sebagai posting foto",
         }
     )
-    assert summary["Jumlah foto"] == "3"
+    assert summary["Jumlah foto (.jpg/.png/.webp)"] == "3"
     assert summary["ZIP tambahan"] == "Ya"
     assert "posting foto" in summary["Pemilahan otomatis"]
 

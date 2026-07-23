@@ -428,12 +428,6 @@ with main_tab:
 
             live_choice = st.selectbox("Format Foto Live untuk sumber VIDEO", ["JPG + MOV", "WebP animasi"])
             live_photo_format = "bundle" if live_choice == "JPG + MOV" else "webp"
-            live_photo_duration = st.selectbox(
-                "Durasi gerak (jika URL berupa video)",
-                [3, 5, 10, 15],
-                index=0,
-                format_func=lambda value: f"{value} detik",
-            )
             photo_live_seconds = st.slider(
                 "Durasi tiap foto pada video Foto Live (jika URL berupa carousel foto)",
                 min_value=1.0,
