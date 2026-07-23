@@ -1,65 +1,42 @@
-# Media Downloader Streamlit — Final v5
+# Media Downloader Final v7
 
-Aplikasi Streamlit untuk mengunduh media publik YouTube, TikTok, dan Instagram menggunakan `yt-dlp`, `gallery-dl`, dan FFmpeg. Gunakan hanya untuk konten milik sendiri, domain publik, berlisensi bebas, atau yang telah diizinkan pemiliknya.
+Aplikasi Streamlit untuk media publik YouTube, TikTok, dan Instagram yang dimiliki pengguna atau telah diizinkan untuk disimpan.
 
-## Fitur
+## Perbaikan utama v7
 
-- Video MP4/MKV dengan kualitas tertinggi sebagai default.
-- Audio MP3 atau audio sumber tanpa konversi.
-- Foto/carousel TikTok dan Instagram pada kualitas tertinggi yang disediakan platform.
-- Thumbnail YouTube beresolusi tertinggi pada mode Foto.
-- Foto Live dari URL video:
-  - ZIP berisi JPG + MOV.
-  - WebP animasi.
-- Pilihan durasi Foto Live 3, 5, 10, atau 15 detik.
-- ZIP otomatis untuk seluruh foto carousel.
-- Pratinjau metadata dan perkiraan ukuran video.
-- Ukuran file aktual setelah proses selesai.
-- Tombol download browser pada deployment online.
-- Deteksi FFmpeg sistem dan fallback portable dari `imageio-ffmpeg`.
-- Konfigurasi siap Streamlit Community Cloud, Render Docker, Windows, dan GitHub Codespaces.
+- Foto carousel selalu tersedia sebagai file JPG/PNG/WebP individual.
+- ZIP semua foto bersifat opsional dan tidak menggantikan file individual.
+- Setiap foto memiliki pratinjau dan tombol download sendiri.
+- Foto Live JPG dan MOV dapat diunduh satu per satu; ZIP pasangan opsional.
+- Pratinjau posting foto menampilkan gambar carousel.
+- Pratinjau Foto Live menampilkan thumbnail dan mencoba memutar video sumber.
+- Mode `Foto / Foto Live (Otomatis)` mendeteksi posting foto atau video.
+- Bila Foto Live dipilih untuk posting foto statis, aplikasi otomatis memberikan foto individual alih-alih error.
+- Pembuatan Foto Live hanya mengunduh potongan awal video yang diperlukan agar lebih cepat dan ringan.
 
 ## Deploy Streamlit Community Cloud
 
-1. Ekstrak ZIP.
-2. Buka folder hasil ekstrak.
-3. Upload **seluruh isi folder** ke root repository GitHub, bukan file ZIP-nya.
-4. Pastikan file berikut berada langsung di root repository:
+Upload seluruh isi folder ini ke root repository GitHub sehingga `app.py`, `requirements.txt`, dan `packages.txt` langsung terlihat di halaman utama repository.
 
-```text
-app.py
-downloader.py
-requirements.txt
-packages.txt
-.streamlit/config.toml
-```
+Gunakan pengaturan:
 
-5. Buat atau perbarui aplikasi di Streamlit Community Cloud dengan main file `app.py`.
-6. Setelah `git push`, buka **Manage app → Reboot app**.
+- Branch: `main`
+- Main file path: `app.py`
 
-`packages.txt` memasang FFmpeg. `requirements.txt` memasang `yt-dlp`, `gallery-dl`, dan fallback FFmpeg portable.
+`packages.txt` memasang FFmpeg. `requirements.txt` memasang Streamlit, yt-dlp, gallery-dl, imageio-ffmpeg, dan Pillow.
 
-## Lokal Windows
+## Penggunaan
 
-1. Jalankan `install.bat`.
-2. Jalankan `run.bat`.
+1. Tempel URL publik.
+2. Untuk kebutuhan foto/foto live, pilih `Foto / Foto Live (Otomatis)`.
+3. Klik `Pratinjau`.
+4. Pilih kualitas dan format.
+5. Centang pernyataan izin.
+6. Klik `Mulai Download`.
+7. Download setiap file satu per satu, atau gunakan ZIP tambahan bila diaktifkan.
 
-## Render
+## Catatan
 
-Buat Web Service dari repository dan gunakan runtime Docker. `Dockerfile` sudah memasang FFmpeg dan menjalankan Streamlit pada port platform.
-
-## Codespaces
-
-```bash
-chmod +x setup_codespaces.sh
-./setup_codespaces.sh
-streamlit run app.py
-```
-
-## Catatan Foto dan Foto Live
-
-- `gallery-dl` dipakai karena pengunduhan album foto bukan fokus utama `yt-dlp`.
-- Postingan foto privat atau yang membutuhkan login tidak diproses oleh konfigurasi publik ini.
-- Paket JPG + MOV merupakan bundle Foto Live portabel. Sebagian iPhone memerlukan aplikasi impor Live Photo agar pasangan tersebut dikenali sebagai satu item Live Photo native.
-- WebP animasi lebih mudah diputar langsung, tetapi tidak sama dengan format Live Photo native Apple.
-- Foto Live dibuat dari video sehingga membutuhkan encoding FFmpeg.
+- "Versi asli" berarti kualitas tertinggi yang masih diberikan platform, bukan file master kamera.
+- Aplikasi tidak membobol DRM, akun privat, paywall, atau pembatasan akses.
+- Endpoint platform dapat berubah. Perbarui yt-dlp dan gallery-dl jika ekstraksi suatu saat gagal.
